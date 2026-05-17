@@ -1,13 +1,15 @@
 import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
-    ClubTeamsResponseSchema
+    ClubTeamsResponseSchema,
+    LeagueTableResponseSchema
 } from "./schemas.js";
 
 import type {
     PlayerSearchResponse,
     ClubSearchResponse,
-    ClubTeamsResponse
+    ClubTeamsResponse,
+    LeagueTableResponse
 } from "./schemas.js";
 
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
@@ -165,5 +167,17 @@ export async function getClubTeams(params: {
         path: "/api/ttr/teams",
         searchParams,
         schema: ClubTeamsResponseSchema
+    });
+}
+
+export async function getLeagueTable(params: {
+    association: string;
+    groupId: string;
+}): Promise<LeagueTableResponse> {
+    return getJsonFromMytt({
+        path: `/api/league-table/${encodeURIComponent(
+            params.association
+        )}/${encodeURIComponent(params.groupId)}`,
+        schema: LeagueTableResponseSchema
     });
 }

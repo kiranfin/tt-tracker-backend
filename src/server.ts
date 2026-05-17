@@ -6,6 +6,7 @@ import {
     searchPlayers,
     searchClubs,
     getClubTeams,
+    getLeagueTable,
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError,
@@ -14,7 +15,8 @@ import {
 import type {
     PlayerSearchResponse,
     ClubSearchResponse,
-    ClubTeamsResponse
+    ClubTeamsResponse,
+    LeagueTableResponse
 } from "./schemas.js";
 
 const app = Fastify({
@@ -244,6 +246,57 @@ app.get("/api/clubs/:organization/:clubNumber/teams", async (request, reply) => 
         });
 
         setCache(cacheKey, result, 60 * 60 * 1000);
+
+        return {
+            data: result,
+            meta: {
+                source: "upstream"
+            }
+        };
+    } catch (error) {
+        request.log.error(error);
+        return handleApiError(error, reply);
+    }
+});
+
+app.get("/api/leagues/:association/:groupId/table", async (request, reply) => {
+    const params = request.params as {
+        association?: string;
+        groupId?: string;
+    };
+
+    const association = params.association?.trim().toUpperCase() ?? "";
+    const groupId = params.groupId?.trim() ?? "";
+
+    if (!association || !groupId) {
+        return reply.code(400).send({
+            error: {
+                code: "INVALID_INPUT",
+                message: "association und groupId sind erforderlich."
+            }
+        });
+    }
+
+    const cacheKey = `league-table:${association}:${groupId}`;
+
+    const cached = getFromCache<LeagueTableResponse>(cacheKey);
+
+    if (cached) {
+        return {
+            data: cached,
+            meta: {
+                source: "cache"
+            }
+        };
+    }
+
+    try {
+        const result = await getLeagueTable({
+            association,
+            groupId
+        });
+
+        setCache(cacheKey, result, 15 * 60 * 1000);
 
         return {
             data: result,

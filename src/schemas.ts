@@ -54,6 +54,48 @@ export const ClubTeamsResponseSchema = z.object({
     error: z.unknown().nullable().optional()
 });
 
+export const LeagueTableRowSchema = z.object({
+    club_id: StringOrNumberSchema.nullable().optional(),
+    team_id: StringOrNumberSchema.nullable().optional(),
+    team_name: z.string().nullable().optional(),
+
+    table_rank: StringOrNumberSchema.nullable().optional(),
+
+    points_won: StringOrNumberSchema.nullable().optional(),
+    points_lost: StringOrNumberSchema.nullable().optional(),
+
+    meetings_count: StringOrNumberSchema.nullable().optional(),
+    meetings_won: StringOrNumberSchema.nullable().optional(),
+    meetings_tie: StringOrNumberSchema.nullable().optional(),
+    meetings_lost: StringOrNumberSchema.nullable().optional(),
+
+    matches_won: StringOrNumberSchema.nullable().optional(),
+    matches_lost: StringOrNumberSchema.nullable().optional(),
+    matches_relation: z.string().nullable().optional(),
+
+    sets_won: StringOrNumberSchema.nullable().optional(),
+    sets_lost: StringOrNumberSchema.nullable().optional(),
+    sets_relation: z.string().nullable().optional(),
+
+    games_won: StringOrNumberSchema.nullable().optional(),
+    games_lost: StringOrNumberSchema.nullable().optional(),
+    games_relation: z.string().nullable().optional(),
+
+    tendency: z.string().nullable().optional(),
+    rise_fall_state: z.string().nullable().optional(),
+    is_excluded: z.boolean().nullable().optional(),
+    is_excluded_date: z.string().nullable().optional(),
+    is_excluded_text: z.string().nullable().optional()
+});
+
+export const LeagueTableResponseSchema = z.object({
+    data: z.array(LeagueTableRowSchema).default([]),
+    error: z.unknown().nullable().optional()
+});
+
+export type LeagueTableRow = z.infer<typeof LeagueTableRowSchema>;
+export type LeagueTableResponse = z.infer<typeof LeagueTableResponseSchema>;
+
 export type PlayerSearchItem = z.infer<typeof PlayerSearchItemSchema>;
 export type PlayerSearchResponse = z.infer<typeof PlayerSearchResponseSchema>;
 
