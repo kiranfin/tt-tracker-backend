@@ -1,5 +1,13 @@
-import { PlayerSearchResponseSchema } from "./schemas.js";
-import type { PlayerSearchResponse } from "./schemas.js";
+import {
+    PlayerSearchResponseSchema,
+    ClubSearchResponseSchema
+} from "./schemas.js";
+
+import type {
+    PlayerSearchResponse,
+    ClubSearchResponse
+} from "./schemas.js";
+
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
 
 const MYTT_BASE_URL =
@@ -30,30 +38,26 @@ export class UpstreamError extends Error {
 
 export { LocalRateLimitError };
 
-export async function searchPlayers(params: {
-    query: string;
-    page?: number;
-    pagesize?: number;
-}): Promise<PlayerSearchResponse> {
+async function postFormToMytt<T>(params: {
+    path: string;
+    body: URLSearchParams;
+    schema: {
+        parse: (value: unknown) => T;
+    };
+}): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
     }
 
     assertCanCallUpstream();
 
-    const body = new URLSearchParams({
-        query: params.query,
-        page: String(params.page ?? 1),
-        pagesize: String(params.pagesize ?? 8)
-    });
-
-    const response = await fetch(`${MYTT_BASE_URL}/api/search/players`, {
+    const response = await fetch(`${MYTT_BASE_URL}${params.path}`, {
         method: "POST",
         headers: {
             "content-type": "application/x-www-form-urlencoded",
-            "accept": "application/json"
+            accept: "application/json"
         },
-        body
+        body: params.body
     });
 
     if (response.status === 429) {
@@ -66,5 +70,41 @@ export async function searchPlayers(params: {
 
     const json = await response.json();
 
-    return PlayerSearchResponseSchema.parse(json);
+    return params.schema.parse(json);
+}
+
+export async function searchPlayers(params: {
+    query: string;
+    page?: number;
+    pagesize?: number;
+}): Promise<PlayerSearchResponse> {
+    const body = new URLSearchParams({
+        query: params.query,
+        page: String(params.page ?? 1),
+        pagesize: String(params.pagesize ?? 8)
+    });
+
+    return postFormToMytt({
+        path: "/api/search/players",
+        body,
+        schema: PlayerSearchResponseSchema
+    });
+}
+
+export async function searchClubs(params: {
+    query: string;
+    page?: number;
+    pagesize?: number;
+}): Promise<ClubSearchResponse> {
+    const body = new URLSearchParams({
+        query: params.query,
+        page: String(params.page ?? 1),
+        pagesize: String(params.pagesize ?? 8)
+    });
+
+    return postFormToMytt({
+        path: "/api/search/clubs",
+        body,
+        schema: ClubSearchResponseSchema
+    });
 }
