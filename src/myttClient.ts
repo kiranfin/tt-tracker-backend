@@ -2,7 +2,7 @@ import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
     ClubTeamsResponseSchema,
-    LeagueTableResponseSchema
+    LeagueTableResponseSchema, LeagueScheduleResponseSchema, LeagueScheduleResponse
 } from "./schemas.js";
 
 import type {
@@ -179,5 +179,51 @@ export async function getLeagueTable(params: {
             params.association
         )}/${encodeURIComponent(params.groupId)}`,
         schema: LeagueTableResponseSchema
+    });
+}
+
+function toLeagueSlug(value: string | undefined): string {
+    if (!value || value.trim().length === 0) {
+        return "x";
+    }
+
+    return value
+        .trim()
+        .replaceAll("ä", "ae")
+        .replaceAll("ö", "oe")
+        .replaceAll("ü", "ue")
+        .replaceAll("Ä", "Ae")
+        .replaceAll("Ö", "Oe")
+        .replaceAll("Ü", "Ue")
+        .replaceAll("ß", "ss")
+        .replaceAll(/[^a-zA-Z0-9]+/g, "_")
+        .replaceAll(/^_+|_+$/g, "");
+}
+
+export async function getLeagueSchedule(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    filter?: "gesamt" | "vr" | "rr";
+}): Promise<LeagueScheduleResponse> {
+    const filter = params.filter ?? "gesamt";
+    const leagueSlug = toLeagueSlug(params.leagueSlug);
+
+    const searchParams = new URLSearchParams({
+        _data:
+            "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/spielplan.$filter"
+    });
+
+    return getJsonFromMytt({
+        path: `/click-tt/${encodeURIComponent(
+            params.association
+        )}/${encodeURIComponent(params.season)}/ligen/${encodeURIComponent(
+            leagueSlug
+        )}/gruppe/${encodeURIComponent(params.groupId)}/spielplan/${encodeURIComponent(
+            filter
+        )}`,
+        searchParams,
+        schema: LeagueScheduleResponseSchema
     });
 }

@@ -10,13 +10,13 @@ import {
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError,
-    LocalRateLimitError
+    LocalRateLimitError, getLeagueSchedule
 } from "./myttClient.js";
 import type {
     PlayerSearchResponse,
     ClubSearchResponse,
     ClubTeamsResponse,
-    LeagueTableResponse
+    LeagueTableResponse, LeagueScheduleResponse
 } from "./schemas.js";
 
 const app = Fastify({
@@ -309,6 +309,76 @@ app.get("/api/leagues/:association/:groupId/table", async (request, reply) => {
         return handleApiError(error, reply);
     }
 });
+
+app.get(
+    "/api/leagues/:association/:season/:groupId/schedule",
+    async (request, reply) => {
+        const params = request.params as {
+            association?: string;
+            season?: string;
+            groupId?: string;
+        };
+
+        const query = request.query as {
+            leagueSlug?: string;
+            filter?: string;
+        };
+
+        const association = params.association?.trim().toUpperCase() ?? "";
+        const season = params.season?.trim() ?? "";
+        const groupId = params.groupId?.trim() ?? "";
+        const leagueSlug = query.leagueSlug?.trim() || "x";
+
+        const filter =
+            query.filter === "vr" || query.filter === "rr" || query.filter === "gesamt"
+                ? query.filter
+                : "gesamt";
+
+        if (!association || !season || !groupId) {
+            return reply.code(400).send({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "association, season und groupId sind erforderlich."
+                }
+            });
+        }
+
+        const cacheKey = `league-schedule:${association}:${season}:${groupId}:${leagueSlug}:${filter}`;
+
+        const cached = getFromCache<LeagueScheduleResponse>(cacheKey);
+
+        if (cached) {
+            return {
+                data: cached,
+                meta: {
+                    source: "cache"
+                }
+            };
+        }
+
+        try {
+            const result = await getLeagueSchedule({
+                association,
+                season,
+                groupId,
+                leagueSlug,
+                filter
+            });
+
+            setCache(cacheKey, result, 60 * 60 * 1000);
+
+            return {
+                data: result,
+                meta: {
+                    source: "upstream"
+                }
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    }
+);
 
 const port = Number(process.env.PORT ?? 4001);
 
