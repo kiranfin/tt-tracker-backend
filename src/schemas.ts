@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const StringOrNumberSchema = z.union([z.string(), z.number()]);
+
 export const PlayerSearchItemSchema = z.object({
     lastname: z.string().nullable().optional(),
     firstname: z.string().nullable().optional(),
@@ -35,11 +37,31 @@ export const ClubSearchResponseSchema = z.object({
     pagesize: z.number().optional()
 });
 
+export const ClubTeamSchema = z.object({
+    season: z.string().nullable().optional(),
+    team_id: StringOrNumberSchema.nullable().optional(),
+    group_id: StringOrNumberSchema.nullable().optional(),
+    team_name: z.string().nullable().optional(),
+    points_won: StringOrNumberSchema.nullable().optional(),
+    points_lost: StringOrNumberSchema.nullable().optional(),
+    table_rank: StringOrNumberSchema.nullable().optional(),
+    league_name: z.string().nullable().optional(),
+    team_organisation_short: z.string().nullable().optional()
+});
+
+export const ClubTeamsResponseSchema = z.object({
+    data: z.array(ClubTeamSchema).default([]),
+    error: z.unknown().nullable().optional()
+});
+
 export type PlayerSearchItem = z.infer<typeof PlayerSearchItemSchema>;
 export type PlayerSearchResponse = z.infer<typeof PlayerSearchResponseSchema>;
 
 export type ClubSearchItem = z.infer<typeof ClubSearchItemSchema>;
 export type ClubSearchResponse = z.infer<typeof ClubSearchResponseSchema>;
+
+export type ClubTeam = z.infer<typeof ClubTeamSchema>;
+export type ClubTeamsResponse = z.infer<typeof ClubTeamsResponseSchema>;
 
 export type ApiResponse<T> = {
     data: T;

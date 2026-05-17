@@ -5,6 +5,7 @@ import { getFromCache, setCache } from "./cache.js";
 import {
     searchPlayers,
     searchClubs,
+    getClubTeams,
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError,
@@ -12,7 +13,8 @@ import {
 } from "./myttClient.js";
 import type {
     PlayerSearchResponse,
-    ClubSearchResponse
+    ClubSearchResponse,
+    ClubTeamsResponse
 } from "./schemas.js";
 
 const app = Fastify({
@@ -53,7 +55,7 @@ function parseSearchParams(query: {
     };
 }
 
-function handleSearchError(error: unknown, reply: any) {
+function handleApiError(error: unknown, reply: any) {
     if (error instanceof LocalRateLimitError) {
         return reply.code(429).send({
             error: {
@@ -148,7 +150,7 @@ app.get("/api/search/players", async (request, reply) => {
         };
     } catch (error) {
         request.log.error(error);
-        return handleSearchError(error, reply);
+        return handleApiError(error, reply);
     }
 });
 
@@ -200,7 +202,58 @@ app.get("/api/search/clubs", async (request, reply) => {
         };
     } catch (error) {
         request.log.error(error);
-        return handleSearchError(error, reply);
+        return handleApiError(error, reply);
+    }
+});
+
+app.get("/api/clubs/:organization/:clubNumber/teams", async (request, reply) => {
+    const params = request.params as {
+        organization?: string;
+        clubNumber?: string;
+    };
+
+    const organization = params.organization?.trim().toUpperCase() ?? "";
+    const clubNumber = params.clubNumber?.trim() ?? "";
+
+    if (!organization || !clubNumber) {
+        return reply.code(400).send({
+            error: {
+                code: "INVALID_INPUT",
+                message: "organization und clubNumber sind erforderlich."
+            }
+        });
+    }
+
+    const cacheKey = `club-teams:${organization}:${clubNumber}`;
+
+    const cached = getFromCache<ClubTeamsResponse>(cacheKey);
+
+    if (cached) {
+        return {
+            data: cached,
+            meta: {
+                source: "cache"
+            }
+        };
+    }
+
+    try {
+        const result = await getClubTeams({
+            organization,
+            clubNumber
+        });
+
+        setCache(cacheKey, result, 60 * 60 * 1000);
+
+        return {
+            data: result,
+            meta: {
+                source: "upstream"
+            }
+        };
+    } catch (error) {
+        request.log.error(error);
+        return handleApiError(error, reply);
     }
 });
 

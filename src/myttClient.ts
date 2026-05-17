@@ -1,11 +1,13 @@
 import {
     PlayerSearchResponseSchema,
-    ClubSearchResponseSchema
+    ClubSearchResponseSchema,
+    ClubTeamsResponseSchema
 } from "./schemas.js";
 
 import type {
     PlayerSearchResponse,
-    ClubSearchResponse
+    ClubSearchResponse,
+    ClubTeamsResponse
 } from "./schemas.js";
 
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
@@ -73,6 +75,47 @@ async function postFormToMytt<T>(params: {
     return params.schema.parse(json);
 }
 
+async function getJsonFromMytt<T>(params: {
+    path: string;
+    searchParams?: URLSearchParams;
+    schema: {
+        parse: (value: unknown) => T;
+    };
+}): Promise<T> {
+    if (!upstreamEnabled) {
+        throw new UpstreamDisabledError();
+    }
+
+    assertCanCallUpstream();
+
+    const url = new URL(`${MYTT_BASE_URL}${params.path}`);
+
+    if (params.searchParams) {
+        params.searchParams.forEach((value, key) => {
+            url.searchParams.set(key, value);
+        });
+    }
+
+    const response = await fetch(url, {
+        method: "GET",
+        headers: {
+            accept: "application/json"
+        }
+    });
+
+    if (response.status === 429) {
+        throw new UpstreamRateLimitError();
+    }
+
+    if (!response.ok) {
+        throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+    }
+
+    const json = await response.json();
+
+    return params.schema.parse(json);
+}
+
 export async function searchPlayers(params: {
     query: string;
     page?: number;
@@ -106,5 +149,21 @@ export async function searchClubs(params: {
         path: "/api/search/clubs",
         body,
         schema: ClubSearchResponseSchema
+    });
+}
+
+export async function getClubTeams(params: {
+    clubNumber: string;
+    organization: string;
+}): Promise<ClubTeamsResponse> {
+    const searchParams = new URLSearchParams({
+        clubNumber: params.clubNumber,
+        organization: params.organization
+    });
+
+    return getJsonFromMytt({
+        path: "/api/ttr/teams",
+        searchParams,
+        schema: ClubTeamsResponseSchema
     });
 }
