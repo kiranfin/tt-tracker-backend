@@ -1,0 +1,11 @@
+export const CACHE_TTL = {
+    PLAYER_SEARCH: 5 * 60 * 1000,
+    CLUB_SEARCH: 15 * 60 * 1000,
+    CLUB_TEAMS: 60 * 60 * 1000,
+    LEAGUE_TABLE: 15 * 60 * 1000,
+    LEAGUE_SCHEDULE: 60 * 60 * 1000,
+
+    MEETING_LIVE: 30 * 1000,
+    MEETING_PLANNED: 2 * 60 * 1000,
+    MEETING_COMPLETED: 6 * 60 * 60 * 1000
+} as const;
