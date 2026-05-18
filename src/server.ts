@@ -10,13 +10,13 @@ import {
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError,
-    LocalRateLimitError, getLeagueSchedule
+    LocalRateLimitError, getLeagueSchedule, getMeetingLive
 } from "./myttClient.js";
 import type {
     PlayerSearchResponse,
     ClubSearchResponse,
     ClubTeamsResponse,
-    LeagueTableResponse, LeagueScheduleResponse
+    LeagueTableResponse, LeagueScheduleResponse, MeetingLiveResponse
 } from "./schemas.js";
 
 const app = Fastify({
@@ -379,6 +379,64 @@ app.get(
         }
     }
 );
+
+app.get("/api/meetings/:meetingId/live", async (request, reply) => {
+    const params = request.params as {
+        meetingId?: string;
+    };
+
+    const meetingId = params.meetingId?.trim() ?? "";
+
+    if (!meetingId) {
+        return reply.code(400).send({
+            error: {
+                code: "INVALID_INPUT",
+                message: "meetingId ist erforderlich."
+            }
+        });
+    }
+
+    const cacheKey = `meeting-live:${meetingId}`;
+
+    const cached = getFromCache<MeetingLiveResponse>(cacheKey);
+
+    if (cached) {
+        return {
+            data: cached,
+            meta: {
+                source: "cache"
+            }
+        };
+    }
+
+    try {
+        const result = await getMeetingLive({
+            meetingId
+        });
+
+        const isLive = result.data?.live === true;
+        const isCompleted = result.data?.is_completed === true;
+
+        const ttlMs = isLive
+            ? 30 * 1000
+            : isCompleted
+                ? 6 * 60 * 60 * 1000
+                : 2 * 60 * 1000;
+
+        setCache(cacheKey, result, ttlMs);
+
+        return {
+            data: result,
+            meta: {
+                source: "upstream",
+                cacheTtlMs: ttlMs
+            }
+        };
+    } catch (error) {
+        request.log.error(error);
+        return handleApiError(error, reply);
+    }
+});
 
 const port = Number(process.env.PORT ?? 4001);
 

@@ -2,7 +2,8 @@ import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
     ClubTeamsResponseSchema,
-    LeagueTableResponseSchema, LeagueScheduleResponseSchema, LeagueScheduleResponse
+    LeagueTableResponseSchema, LeagueScheduleResponseSchema, LeagueScheduleResponse, MeetingLiveResponseSchema,
+    MeetingLiveResponse
 } from "./schemas.js";
 
 import type {
@@ -225,5 +226,14 @@ export async function getLeagueSchedule(params: {
         )}`,
         searchParams,
         schema: LeagueScheduleResponseSchema
+    });
+}
+
+export async function getMeetingLive(params: {
+    meetingId: string;
+}): Promise<MeetingLiveResponse> {
+    return getJsonFromMytt({
+        path: `/api/meeting/${encodeURIComponent(params.meetingId)}/live`,
+        schema: MeetingLiveResponseSchema
     });
 }

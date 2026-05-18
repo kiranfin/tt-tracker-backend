@@ -162,6 +162,71 @@ export const LeagueScheduleResponseSchema = z.object({
     }).optional()
 });
 
+export const MeetingPlayerSchema = z
+    .object({
+        firstname: z.string().nullable().optional(),
+        lastname: z.string().nullable().optional(),
+        person_id: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const MeetingMatchSchema = z
+    .object({
+        match_name: z.string().nullable().optional(),
+        game_type: z.string().nullable().optional(),
+
+        sets_home: StringOrNumberSchema.nullable().optional(),
+        sets_guest: StringOrNumberSchema.nullable().optional(),
+
+        set1_home: StringOrNumberSchema.nullable().optional(),
+        set1_guest: StringOrNumberSchema.nullable().optional(),
+        set2_home: StringOrNumberSchema.nullable().optional(),
+        set2_guest: StringOrNumberSchema.nullable().optional(),
+        set3_home: StringOrNumberSchema.nullable().optional(),
+        set3_guest: StringOrNumberSchema.nullable().optional(),
+        set4_home: StringOrNumberSchema.nullable().optional(),
+        set4_guest: StringOrNumberSchema.nullable().optional(),
+        set5_home: StringOrNumberSchema.nullable().optional(),
+        set5_guest: StringOrNumberSchema.nullable().optional(),
+
+        mm_player11: MeetingPlayerSchema.nullable().optional(),
+        mm_player12: MeetingPlayerSchema.nullable().optional(),
+        mm_player21: MeetingPlayerSchema.nullable().optional(),
+        mm_player22: MeetingPlayerSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const MeetingLiveDataSchema = z
+    .object({
+        live: z.boolean().nullable().optional(),
+        is_completed: z.boolean().nullable().optional(),
+        has_nu_live_push_data: z.boolean().nullable().optional(),
+
+        scheduled: z.string().nullable().optional(),
+
+        team_home: z.string().nullable().optional(),
+        team_guest: z.string().nullable().optional(),
+
+        matches_home: StringOrNumberSchema.nullable().optional(),
+        matches_guest: StringOrNumberSchema.nullable().optional(),
+
+        sets_home: StringOrNumberSchema.nullable().optional(),
+        sets_guest: StringOrNumberSchema.nullable().optional(),
+
+        match: z.array(MeetingMatchSchema).default([])
+    })
+    .passthrough();
+
+export const MeetingLiveResponseSchema = z.object({
+    data: MeetingLiveDataSchema.nullable().optional(),
+    error: z.unknown().nullable().optional()
+});
+
+export type MeetingPlayer = z.infer<typeof MeetingPlayerSchema>;
+export type MeetingMatch = z.infer<typeof MeetingMatchSchema>;
+export type MeetingLiveData = z.infer<typeof MeetingLiveDataSchema>;
+export type MeetingLiveResponse = z.infer<typeof MeetingLiveResponseSchema>;
+
 export type LeagueScheduleMeeting = z.infer<typeof LeagueScheduleMeetingSchema>;
 export type LeagueScheduleResponse = z.infer<typeof LeagueScheduleResponseSchema>;
 
