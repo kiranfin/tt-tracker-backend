@@ -222,6 +222,62 @@ export const MeetingLiveResponseSchema = z.object({
     error: z.unknown().nullable().optional()
 });
 
+export const PlayerTtrResponseSchema = z.object({
+    ttr: StringOrNumberSchema.nullable().optional(),
+    error: z.unknown().nullable().optional()
+});
+
+export const PlayerTtrEventMatchSchema = z
+    .object({
+        type: z.string().nullable().optional(),
+        own_sets: StringOrNumberSchema.nullable().optional(),
+        other_sets: StringOrNumberSchema.nullable().optional(),
+        other_ttr: StringOrNumberSchema.nullable().optional(),
+        scheduled: z.string().nullable().optional(),
+        own_person_name: z.string().nullable().optional(),
+        other_person_name: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const PlayerTtrEventSchema = z
+    .object({
+        event_id: StringOrNumberSchema.nullable().optional(),
+        event_name: z.string().nullable().optional(),
+        event_date_time: z.string().nullable().optional(),
+
+        ttr_before: StringOrNumberSchema.nullable().optional(),
+        ttr_after: StringOrNumberSchema.nullable().optional(),
+        ttr_delta: StringOrNumberSchema.nullable().optional(),
+
+        match_count: StringOrNumberSchema.nullable().optional(),
+        matches_won: StringOrNumberSchema.nullable().optional(),
+        matches_lost: StringOrNumberSchema.nullable().optional(),
+
+        expected_result: z.string().nullable().optional(),
+        alteration_constant: StringOrNumberSchema.nullable().optional(),
+
+        match: z.array(PlayerTtrEventMatchSchema).default([])
+    })
+    .passthrough();
+
+export const PlayerTtrHistoryResponseSchema = z
+    .object({
+        ttr: StringOrNumberSchema.nullable().optional(),
+        vq_ttr: StringOrNumberSchema.nullable().optional(),
+        max_ttr: StringOrNumberSchema.nullable().optional(),
+
+        ttr_date: z.string().nullable().optional(),
+        max_ttr_date: z.string().nullable().optional(),
+
+        club_name: z.string().nullable().optional(),
+        person_id: z.string().nullable().optional(),
+        person_name: z.string().nullable().optional(),
+
+        event: z.array(PlayerTtrEventSchema).default([]),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
 export type MeetingPlayer = z.infer<typeof MeetingPlayerSchema>;
 export type MeetingMatch = z.infer<typeof MeetingMatchSchema>;
 export type MeetingLiveData = z.infer<typeof MeetingLiveDataSchema>;
@@ -241,6 +297,10 @@ export type ClubSearchResponse = z.infer<typeof ClubSearchResponseSchema>;
 
 export type ClubTeam = z.infer<typeof ClubTeamSchema>;
 export type ClubTeamsResponse = z.infer<typeof ClubTeamsResponseSchema>;
+
+export type PlayerTtrResponse = z.infer<typeof PlayerTtrResponseSchema>;
+export type PlayerTtrHistoryResponse = z.infer<typeof PlayerTtrHistoryResponseSchema>;
+export type PlayerTtrEvent = z.infer<typeof PlayerTtrEventSchema>;
 
 export type ApiResponse<T> = {
     data: T;

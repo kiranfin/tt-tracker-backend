@@ -6,6 +6,7 @@ import { searchRoutes } from "./routes/searchRoutes.js";
 import { clubRoutes } from "./routes/clubRoutes.js";
 import { leagueRoutes } from "./routes/leagueRoutes.js";
 import { meetingRoutes } from "./routes/meetingRoutes.js";
+import { playerRoutes } from "./routes/playerRoutes.js";
 
 const app = Fastify({
     logger: true
@@ -22,7 +23,31 @@ app.get("/health", async () => {
     };
 });
 
+app.addHook("preHandler", async (request, reply) => {
+    if (request.url === "/health") {
+        return;
+    }
+
+    const expectedApiKey = process.env.TTTRACKER_API_KEY;
+
+    if (!expectedApiKey) {
+        return;
+    }
+
+    const providedApiKey = request.headers["x-api-key"];
+
+    if (providedApiKey !== expectedApiKey) {
+        return reply.code(401).send({
+            error: {
+                code: "UNAUTHORIZED",
+                message: "Ungültiger API-Key."
+            }
+        });
+    }
+});
+
 await app.register(searchRoutes);
+await app.register(playerRoutes);
 await app.register(clubRoutes);
 await app.register(leagueRoutes);
 await app.register(meetingRoutes);

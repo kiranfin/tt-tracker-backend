@@ -1,5 +1,8 @@
 export const CACHE_TTL = {
     PLAYER_SEARCH: 5 * 60 * 1000,
+    PLAYER_TTR: 30 * 60 * 1000,
+    PLAYER_TTR_HISTORY: 60 * 60 * 1000,
+
     CLUB_SEARCH: 15 * 60 * 1000,
     CLUB_TEAMS: 60 * 60 * 1000,
     LEAGUE_TABLE: 15 * 60 * 1000,

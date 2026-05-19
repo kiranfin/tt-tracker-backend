@@ -2,15 +2,22 @@ import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
     ClubTeamsResponseSchema,
-    LeagueTableResponseSchema, LeagueScheduleResponseSchema, LeagueScheduleResponse, MeetingLiveResponseSchema,
-    MeetingLiveResponse
+    LeagueTableResponseSchema,
+    LeagueScheduleResponseSchema,
+    LeagueScheduleResponse,
+    MeetingLiveResponseSchema,
+    MeetingLiveResponse,
+    PlayerTtrResponseSchema,
+    PlayerTtrHistoryResponseSchema
 } from "./schemas.js";
 
 import type {
     PlayerSearchResponse,
     ClubSearchResponse,
     ClubTeamsResponse,
-    LeagueTableResponse
+    LeagueTableResponse,
+    PlayerTtrResponse,
+    PlayerTtrHistoryResponse
 } from "./schemas.js";
 
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
@@ -19,6 +26,19 @@ const MYTT_BASE_URL =
     process.env.MYTT_BASE_URL ?? "https://www.mytischtennis.de";
 
 const upstreamEnabled = process.env.MYTT_UPSTREAM_ENABLED !== "false";
+
+function getMyttHeaders(extraHeaders?: Record<string, string>) {
+    const headers: Record<string, string> = {
+        accept: "application/json",
+        ...extraHeaders
+    };
+
+    if (process.env.MYTT_COOKIE) {
+        headers.cookie = process.env.MYTT_COOKIE;
+    }
+
+    return headers;
+}
 
 export class UpstreamRateLimitError extends Error {
     constructor() {
@@ -58,10 +78,9 @@ async function postFormToMytt<T>(params: {
 
     const response = await fetch(`${MYTT_BASE_URL}${params.path}`, {
         method: "POST",
-        headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            accept: "application/json"
-        },
+        headers: getMyttHeaders({
+            "content-type": "application/x-www-form-urlencoded"
+        }),
         body: params.body
     });
 
@@ -101,9 +120,7 @@ async function getJsonFromMytt<T>(params: {
 
     const response = await fetch(url, {
         method: "GET",
-        headers: {
-            accept: "application/json"
-        }
+        headers: getMyttHeaders()
     });
 
     if (response.status === 429) {
@@ -235,5 +252,23 @@ export async function getMeetingLive(params: {
     return getJsonFromMytt({
         path: `/api/meeting/${encodeURIComponent(params.meetingId)}/live`,
         schema: MeetingLiveResponseSchema
+    });
+}
+
+export async function getPlayerTtr(params: {
+    nuid: string;
+}): Promise<PlayerTtrResponse> {
+    return getJsonFromMytt({
+        path: `/api/ttr/player/${encodeURIComponent(params.nuid)}`,
+        schema: PlayerTtrResponseSchema
+    });
+}
+
+export async function getPlayerTtrHistory(params: {
+    nuid: string;
+}): Promise<PlayerTtrHistoryResponse> {
+    return getJsonFromMytt({
+        path: `/api/ttr/history/${encodeURIComponent(params.nuid)}`,
+        schema: PlayerTtrHistoryResponseSchema
     });
 }
