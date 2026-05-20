@@ -7,9 +7,14 @@ import { clubRoutes } from "./routes/clubRoutes.js";
 import { leagueRoutes } from "./routes/leagueRoutes.js";
 import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { playerRoutes } from "./routes/playerRoutes.js";
+import { getRateLimitStatus } from "./rateLimiter.js";
+import { getUpstreamUsage } from "./upstreamTracker.js";
+import { requestContext } from "./requestContext.js";
+import { writeJsonLog } from "./fileLogger.js";
 
 const app = Fastify({
-    logger: true
+    logger: true,
+    trustProxy: true
 });
 
 await app.register(cors, {
@@ -21,6 +26,28 @@ app.get("/health", async () => {
         ok: true,
         service: "tt-tracker-api"
     };
+});
+
+app.addHook("onRequest", (request, reply, done) => {
+    const context = {
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        ip: request.ip,
+        userAgent: request.headers["user-agent"]
+    };
+
+    requestContext.run(context, () => {
+        void writeJsonLog("backend_request", {
+            requestId: context.requestId,
+            method: context.method,
+            url: context.url,
+            ip: context.ip,
+            userAgent: context.userAgent
+        });
+
+        done();
+    });
 });
 
 app.addHook("preHandler", async (request, reply) => {
@@ -44,6 +71,13 @@ app.addHook("preHandler", async (request, reply) => {
             }
         });
     }
+});
+
+app.get("/debug/status", async () => {
+    return {
+        rateLimit: getRateLimitStatus(),
+        upstream: getUpstreamUsage()
+    };
 });
 
 await app.register(searchRoutes);

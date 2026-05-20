@@ -20,6 +20,10 @@ import type {
     PlayerTtrHistoryResponse
 } from "./schemas.js";
 
+import { getRequestContext } from "./requestContext.js";
+import { writeJsonLog } from "./fileLogger.js";
+import { trackUpstreamRequest } from "./upstreamTracker.js";
+
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
 
 const MYTT_BASE_URL =
@@ -74,27 +78,74 @@ async function postFormToMytt<T>(params: {
         throw new UpstreamDisabledError();
     }
 
-    assertCanCallUpstream();
+    const context = getRequestContext();
 
-    const response = await fetch(`${MYTT_BASE_URL}${params.path}`, {
-        method: "POST",
-        headers: getMyttHeaders({
-            "content-type": "application/x-www-form-urlencoded"
-        }),
-        body: params.body
-    });
+    try {
+        assertCanCallUpstream();
+    } catch (error) {
+        void writeJsonLog("mytt_upstream_blocked", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            reason: "local_rate_limit",
+            myttMethod: "POST",
+            myttPath: params.path
+        });
 
-    if (response.status === 429) {
-        throw new UpstreamRateLimitError();
+        throw error;
     }
 
-    if (!response.ok) {
-        throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+    const url = `${MYTT_BASE_URL}${params.path}`;
+    const startedAt = Date.now();
+
+    try {
+        const response = await fetch(url, {
+            method: "POST",
+            headers: getMyttHeaders({
+                "content-type": "application/x-www-form-urlencoded"
+            }),
+            body: params.body
+        });
+
+        void writeJsonLog("mytt_upstream_request", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "POST",
+            myttPath: params.path,
+            status: response.status,
+            ok: response.ok,
+            durationMs: Date.now() - startedAt
+        });
+
+        if (response.status === 429) {
+            throw new UpstreamRateLimitError();
+        }
+
+        if (!response.ok) {
+            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+        }
+
+        const json = await response.json();
+
+        return params.schema.parse(json);
+    } catch (error) {
+        void writeJsonLog("mytt_upstream_error", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "POST",
+            myttPath: params.path,
+            durationMs: Date.now() - startedAt,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: error instanceof Error ? error.message : "Unknown error"
+        });
+
+        throw error;
     }
-
-    const json = await response.json();
-
-    return params.schema.parse(json);
 }
 
 async function getJsonFromMytt<T>(params: {
@@ -108,7 +159,23 @@ async function getJsonFromMytt<T>(params: {
         throw new UpstreamDisabledError();
     }
 
-    assertCanCallUpstream();
+    const context = getRequestContext();
+
+    try {
+        assertCanCallUpstream();
+    } catch (error) {
+        void writeJsonLog("mytt_upstream_blocked", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            reason: "local_rate_limit",
+            myttMethod: "GET",
+            myttPath: params.path
+        });
+
+        throw error;
+    }
 
     const url = new URL(`${MYTT_BASE_URL}${params.path}`);
 
@@ -118,22 +185,55 @@ async function getJsonFromMytt<T>(params: {
         });
     }
 
-    const response = await fetch(url, {
-        method: "GET",
-        headers: getMyttHeaders()
-    });
+    const urlString = url.toString();
+    const startedAt = Date.now();
 
-    if (response.status === 429) {
-        throw new UpstreamRateLimitError();
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            headers: getMyttHeaders()
+        });
+
+        void writeJsonLog("mytt_upstream_request", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "GET",
+            myttPath: params.path,
+            myttUrl: urlString,
+            status: response.status,
+            ok: response.ok,
+            durationMs: Date.now() - startedAt
+        });
+
+        if (response.status === 429) {
+            throw new UpstreamRateLimitError();
+        }
+
+        if (!response.ok) {
+            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+        }
+
+        const json = await response.json();
+
+        return params.schema.parse(json);
+    } catch (error) {
+        void writeJsonLog("mytt_upstream_error", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "GET",
+            myttPath: params.path,
+            myttUrl: urlString,
+            durationMs: Date.now() - startedAt,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: error instanceof Error ? error.message : "Unknown error"
+        });
+
+        throw error;
     }
-
-    if (!response.ok) {
-        throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
-    }
-
-    const json = await response.json();
-
-    return params.schema.parse(json);
 }
 
 export async function searchPlayers(params: {
