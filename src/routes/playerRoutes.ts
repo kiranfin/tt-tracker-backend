@@ -33,13 +33,13 @@ export async function playerRoutes(app: FastifyInstance) {
         const cacheKey = `player-ttr:${nuid}`;
         const cached = getFromCache<PlayerTtrResponse>(cacheKey);
 
-        if (cached) {
+        if (cached && !hasAuthError(cached) && cached.ttr != null) {
             return {
                 data: {
                     nuid,
-                    available: !hasAuthError(cached) && cached.ttr != null,
-                    ttr: cached.ttr ?? null,
-                    error: cached.error ?? null
+                    available: true,
+                    ttr: cached.ttr,
+                    error: null
                 },
                 meta: {
                     source: "cache"
@@ -50,7 +50,9 @@ export async function playerRoutes(app: FastifyInstance) {
         try {
             const result = await getPlayerTtr({ nuid });
 
-            setCache(cacheKey, result, CACHE_TTL.PLAYER_TTR);
+            if (!hasAuthError(result) && result.ttr != null) {
+                setCache(cacheKey, result, CACHE_TTL.PLAYER_TTR);
+            }
 
             return {
                 data: {
