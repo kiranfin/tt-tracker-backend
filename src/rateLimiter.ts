@@ -1,4 +1,5 @@
-const requestTimestamps: number[] = [];
+const upstreamRequestTimestamps: number[] = [];
+const htmlFallbackRequestTimestamps: number[] = [];
 
 const WINDOW_MS = 60 * 60 * 1000;
 
@@ -12,50 +13,71 @@ export class LocalRateLimitError extends Error {
     }
 }
 
-function getMaxRequestsPerHour(): number {
-    const raw = process.env.MYTT_MAX_REQUESTS_PER_HOUR;
+export class LocalHtmlRateLimitError extends LocalRateLimitError {
+    constructor(retryAfterMs: number) {
+        super(retryAfterMs);
+        this.name = "LocalHtmlRateLimitError";
+        this.message = "Local HTML fallback request limit reached";
+    }
+}
+
+function readPositiveNumberFromEnv(params: {
+    key: string;
+    fallback: number;
+}): number {
+    const raw = process.env[params.key];
 
     if (!raw || raw.trim() === "") {
-        return 60;
+        return params.fallback;
     }
 
     const parsed = Number(raw);
 
     if (!Number.isFinite(parsed) || parsed < 1) {
         console.warn(
-            `Invalid MYTT_MAX_REQUESTS_PER_HOUR="${raw}", falling back to 60`
+            `Invalid ${params.key}="${raw}", falling back to ${params.fallback}`
         );
-        return 60;
+        return params.fallback;
     }
 
     return parsed;
 }
 
-function cleanupOldRequests() {
+function getMaxUpstreamRequestsPerHour(): number {
+    return readPositiveNumberFromEnv({
+        key: "MYTT_MAX_REQUESTS_PER_HOUR",
+        fallback: 60
+    });
+}
+
+function getMaxHtmlFallbackRequestsPerHour(): number {
+    return readPositiveNumberFromEnv({
+        key: "MYTT_HTML_MAX_REQUESTS_PER_HOUR",
+        fallback: 30
+    });
+}
+
+function cleanupOldRequests(timestamps: number[]) {
     const oneHourAgo = Date.now() - WINDOW_MS;
 
-    while (
-        requestTimestamps.length > 0 &&
-        requestTimestamps[0] < oneHourAgo
-        ) {
-        requestTimestamps.shift();
+    while (timestamps.length > 0 && timestamps[0] < oneHourAgo) {
+        timestamps.shift();
     }
 }
 
-export function getRateLimitStatus() {
-    cleanupOldRequests();
+function getBucketStatus(params: { timestamps: number[]; max: number }) {
+    cleanupOldRequests(params.timestamps);
 
-    const max = getMaxRequestsPerHour();
-    const used = requestTimestamps.length;
-    const remaining = Math.max(0, max - used);
+    const used = params.timestamps.length;
+    const remaining = Math.max(0, params.max - used);
 
     const resetInMs =
-        requestTimestamps.length > 0
-            ? Math.max(0, requestTimestamps[0] + WINDOW_MS - Date.now())
+        params.timestamps.length > 0
+            ? Math.max(0, params.timestamps[0] + WINDOW_MS - Date.now())
             : 0;
 
     return {
-        max,
+        max: params.max,
         used,
         remaining,
         resetInMs,
@@ -67,18 +89,50 @@ export function getRateLimitStatus() {
     };
 }
 
-export function assertCanCallUpstream(): void {
-    cleanupOldRequests();
+function assertCanUseBucket(params: {
+    timestamps: number[];
+    max: number;
+    createError: (retryAfterMs: number) => Error;
+}) {
+    cleanupOldRequests(params.timestamps);
 
-    const maxRequestsPerHour = getMaxRequestsPerHour();
     const now = Date.now();
 
-    if (requestTimestamps.length >= maxRequestsPerHour) {
-        const oldestRequest = requestTimestamps[0];
+    if (params.timestamps.length >= params.max) {
+        const oldestRequest = params.timestamps[0];
         const retryAfterMs = Math.max(1000, oldestRequest + WINDOW_MS - now);
 
-        throw new LocalRateLimitError(retryAfterMs);
+        throw params.createError(retryAfterMs);
     }
 
-    requestTimestamps.push(now);
+    params.timestamps.push(now);
+}
+
+export function getRateLimitStatus() {
+    return {
+        upstream: getBucketStatus({
+            timestamps: upstreamRequestTimestamps,
+            max: getMaxUpstreamRequestsPerHour()
+        }),
+        htmlFallback: getBucketStatus({
+            timestamps: htmlFallbackRequestTimestamps,
+            max: getMaxHtmlFallbackRequestsPerHour()
+        })
+    };
+}
+
+export function assertCanCallUpstream(): void {
+    assertCanUseBucket({
+        timestamps: upstreamRequestTimestamps,
+        max: getMaxUpstreamRequestsPerHour(),
+        createError: (retryAfterMs) => new LocalRateLimitError(retryAfterMs)
+    });
+}
+
+export function assertCanCallHtmlFallback(): void {
+    assertCanUseBucket({
+        timestamps: htmlFallbackRequestTimestamps,
+        max: getMaxHtmlFallbackRequestsPerHour(),
+        createError: (retryAfterMs) => new LocalHtmlRateLimitError(retryAfterMs)
+    });
 }

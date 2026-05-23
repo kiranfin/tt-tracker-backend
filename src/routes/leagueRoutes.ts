@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { getFromCache, setCache } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
+import { getLeagueTableFromHtml } from "../htmlFallback/leagueTableHtmlFallback.js";
 import { getLeagueSchedule, getLeagueTable } from "../myttClient.js";
+import { LocalRateLimitError } from "../rateLimiter.js";
 import type {
     LeagueScheduleResponse,
     LeagueTableResponse
@@ -54,6 +56,27 @@ export async function leagueRoutes(app: FastifyInstance) {
                 }
             };
         } catch (error) {
+            if (error instanceof LocalRateLimitError) {
+                try {
+                    const result = await getLeagueTableFromHtml({
+                        association,
+                        groupId
+                    });
+
+                    setCache(cacheKey, result, CACHE_TTL.LEAGUE_TABLE);
+
+                    return {
+                        data: result,
+                        meta: {
+                            source: "html-fallback"
+                        }
+                    };
+                } catch (fallbackError) {
+                    request.log.error(fallbackError);
+                    return handleApiError(fallbackError, reply);
+                }
+            }
+
             request.log.error(error);
             return handleApiError(error, reply);
         }
