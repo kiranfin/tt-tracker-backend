@@ -1,3 +1,5 @@
+// src/myttClient.ts
+
 import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
@@ -22,8 +24,6 @@ import type {
 
 import { getRequestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
-import { trackUpstreamRequest } from "./upstreamTracker.js";
-
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
 
 const MYTT_BASE_URL =
@@ -31,14 +31,30 @@ const MYTT_BASE_URL =
 
 const upstreamEnabled = process.env.MYTT_UPSTREAM_ENABLED !== "false";
 
-function getMyttHeaders(extraHeaders?: Record<string, string>) {
+function shouldCountTowardsLocalRateLimit(params: {
+    path: string;
+    countTowardsLocalRateLimit?: boolean;
+}) {
+    return params.countTowardsLocalRateLimit ?? !params.path.startsWith("/api/ttr/");
+}
+
+function getMyttHeaders(params?: {
+    extraHeaders?: Record<string, string>;
+    authenticated?: boolean;
+}) {
     const headers: Record<string, string> = {
         accept: "application/json",
-        ...extraHeaders
+        ...params?.extraHeaders
     };
 
-    if (process.env.MYTT_COOKIE) {
-        headers.cookie = process.env.MYTT_COOKIE;
+    const shouldSendCookie =
+        params?.authenticated === true ||
+        process.env.MYTT_SEND_COOKIE_FOR_PUBLIC_API === "true";
+
+    const cookie = process.env.MYTT_COOKIE?.trim();
+
+    if (shouldSendCookie && cookie) {
+        headers.cookie = cookie;
     }
 
     return headers;
@@ -73,6 +89,8 @@ async function postFormToMytt<T>(params: {
     schema: {
         parse: (value: unknown) => T;
     };
+    authenticated?: boolean;
+    countTowardsLocalRateLimit?: boolean;
 }): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
@@ -80,20 +98,24 @@ async function postFormToMytt<T>(params: {
 
     const context = getRequestContext();
 
-    try {
-        assertCanCallUpstream();
-    } catch (error) {
-        void writeJsonLog("mytt_upstream_blocked", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            reason: "local_rate_limit",
-            myttMethod: "POST",
-            myttPath: params.path
-        });
+    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
 
-        throw error;
+    if (countTowardsLocalRateLimit) {
+        try {
+            assertCanCallUpstream();
+        } catch (error) {
+            void writeJsonLog("mytt_upstream_blocked", {
+                requestId: context?.requestId,
+                clientIp: context?.ip,
+                backendMethod: context?.method,
+                backendUrl: context?.url,
+                reason: "local_rate_limit",
+                myttMethod: "POST",
+                myttPath: params.path
+            });
+
+            throw error;
+        }
     }
 
     const url = `${MYTT_BASE_URL}${params.path}`;
@@ -103,7 +125,10 @@ async function postFormToMytt<T>(params: {
         const response = await fetch(url, {
             method: "POST",
             headers: getMyttHeaders({
-                "content-type": "application/x-www-form-urlencoded"
+                authenticated: params.authenticated,
+                extraHeaders: {
+                    "content-type": "application/x-www-form-urlencoded"
+                }
             }),
             body: params.body
         });
@@ -117,7 +142,8 @@ async function postFormToMytt<T>(params: {
             myttPath: params.path,
             status: response.status,
             ok: response.ok,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            localRateLimitCounted: countTowardsLocalRateLimit
         });
 
         if (response.status === 429) {
@@ -154,6 +180,8 @@ async function getJsonFromMytt<T>(params: {
     schema: {
         parse: (value: unknown) => T;
     };
+    authenticated?: boolean;
+    countTowardsLocalRateLimit?: boolean;
 }): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
@@ -161,20 +189,24 @@ async function getJsonFromMytt<T>(params: {
 
     const context = getRequestContext();
 
-    try {
-        assertCanCallUpstream();
-    } catch (error) {
-        void writeJsonLog("mytt_upstream_blocked", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            reason: "local_rate_limit",
-            myttMethod: "GET",
-            myttPath: params.path
-        });
+    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
 
-        throw error;
+    if (countTowardsLocalRateLimit) {
+        try {
+            assertCanCallUpstream();
+        } catch (error) {
+            void writeJsonLog("mytt_upstream_blocked", {
+                requestId: context?.requestId,
+                clientIp: context?.ip,
+                backendMethod: context?.method,
+                backendUrl: context?.url,
+                reason: "local_rate_limit",
+                myttMethod: "GET",
+                myttPath: params.path
+            });
+
+            throw error;
+        }
     }
 
     const url = new URL(`${MYTT_BASE_URL}${params.path}`);
@@ -191,7 +223,9 @@ async function getJsonFromMytt<T>(params: {
     try {
         const response = await fetch(url, {
             method: "GET",
-            headers: getMyttHeaders()
+            headers: getMyttHeaders({
+                authenticated: params.authenticated
+            })
         });
 
         void writeJsonLog("mytt_upstream_request", {
@@ -204,7 +238,8 @@ async function getJsonFromMytt<T>(params: {
             myttUrl: urlString,
             status: response.status,
             ok: response.ok,
-            durationMs: Date.now() - startedAt
+            durationMs: Date.now() - startedAt,
+            localRateLimitCounted: countTowardsLocalRateLimit
         });
 
         if (response.status === 429) {
@@ -360,7 +395,9 @@ export async function getPlayerTtr(params: {
 }): Promise<PlayerTtrResponse> {
     return getJsonFromMytt({
         path: `/api/ttr/player/${encodeURIComponent(params.nuid)}`,
-        schema: PlayerTtrResponseSchema
+        schema: PlayerTtrResponseSchema,
+        authenticated: true,
+        countTowardsLocalRateLimit: false
     });
 }
 
@@ -369,6 +406,8 @@ export async function getPlayerTtrHistory(params: {
 }): Promise<PlayerTtrHistoryResponse> {
     return getJsonFromMytt({
         path: `/api/ttr/history/${encodeURIComponent(params.nuid)}`,
-        schema: PlayerTtrHistoryResponseSchema
+        schema: PlayerTtrHistoryResponseSchema,
+        authenticated: true,
+        countTowardsLocalRateLimit: false
     });
 }
