@@ -11,6 +11,10 @@ import { getRateLimitStatus } from "./rateLimiter.js";
 import { getUpstreamUsage } from "./upstreamTracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
+import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
+import { authRoutes } from "./routes/authRoutes.js";
+import { attachOptionalAppUser } from "./authRequest.js";
+import { getRequestContext } from "./requestContext.js";
 
 const app = Fastify({
     logger: true,
@@ -29,12 +33,19 @@ app.get("/health", async () => {
 });
 
 app.addHook("onRequest", (request, reply, done) => {
+    const rawAppUserId = request.headers["x-tt-user-id"];
+    const appUserId =
+        typeof rawAppUserId === "string"
+            ? rawAppUserId.trim().toLowerCase()
+            : null;
+
     const context = {
         requestId: request.id,
         method: request.method,
         url: request.url,
         ip: request.ip,
-        userAgent: request.headers["user-agent"]
+        userAgent: request.headers["user-agent"],
+        appUserId
     };
 
     requestContext.run(context, () => {
@@ -43,22 +54,41 @@ app.addHook("onRequest", (request, reply, done) => {
             method: context.method,
             url: context.url,
             ip: context.ip,
-            userAgent: context.userAgent
+            userAgent: context.userAgent,
+            appUserId: context.appUserId
         });
 
         done();
     });
 });
 
+function getPathname(url: string) {
+    return url.split("?")[0] ?? url;
+}
+
+function requiresBackendApiKey(url: string) {
+    const pathname = getPathname(url);
+
+    return (
+        pathname === "/debug/status" ||
+        pathname.startsWith("/api/admin/")
+    );
+}
+
 app.addHook("preHandler", async (request, reply) => {
-    if (request.url === "/health") {
+    if (!requiresBackendApiKey(request.url)) {
         return;
     }
 
     const expectedApiKey = process.env.TTTRACKER_API_KEY;
 
     if (!expectedApiKey) {
-        return;
+        return reply.code(503).send({
+            error: {
+                code: "API_KEY_NOT_CONFIGURED",
+                message: "Admin-Zugriff ist nicht konfiguriert."
+            }
+        });
     }
 
     const providedApiKey = request.headers["x-api-key"];
@@ -73,6 +103,27 @@ app.addHook("preHandler", async (request, reply) => {
     }
 });
 
+app.addHook("preHandler", async (request, reply) => {
+    try {
+        const user = await attachOptionalAppUser(request);
+
+        const context = getRequestContext();
+
+        if (context) {
+            context.appUserId = user?.id ?? null;
+        }
+    } catch (error) {
+        request.log.error(error);
+
+        return reply.code(401).send({
+            error: {
+                code: "INVALID_TOKEN",
+                message: "Login ist ungültig oder abgelaufen. Bitte erneut einloggen."
+            }
+        });
+    }
+});
+
 app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
@@ -80,11 +131,13 @@ app.get("/debug/status", async () => {
     };
 });
 
+await app.register(authRoutes);
 await app.register(searchRoutes);
 await app.register(playerRoutes);
 await app.register(clubRoutes);
 await app.register(leagueRoutes);
 await app.register(meetingRoutes);
+await app.register(myttSessionRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 

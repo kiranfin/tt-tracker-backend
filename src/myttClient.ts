@@ -1,5 +1,3 @@
-// src/myttClient.ts
-
 import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
@@ -22,6 +20,14 @@ import type {
     PlayerTtrHistoryResponse
 } from "./schemas.js";
 
+import {
+    markMyttSessionExpired,
+    MyttSessionExpiredError,
+    resolveMyttSessionForRequest,
+    type MyttScope,
+    type ResolvedMyttSession
+} from "./myttSessionStore.js";
+
 import { getRequestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
 import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
@@ -41,23 +47,39 @@ function shouldCountTowardsLocalRateLimit(params: {
 function getMyttHeaders(params?: {
     extraHeaders?: Record<string, string>;
     authenticated?: boolean;
+    sessionCookie?: string;
 }) {
     const headers: Record<string, string> = {
         accept: "application/json",
         ...params?.extraHeaders
     };
 
-    const shouldSendCookie =
-        params?.authenticated === true ||
-        process.env.MYTT_SEND_COOKIE_FOR_PUBLIC_API === "true";
-
-    const cookie = process.env.MYTT_COOKIE?.trim();
-
-    if (shouldSendCookie && cookie) {
-        headers.cookie = cookie;
+    if (params?.authenticated === true && params.sessionCookie) {
+        headers.cookie = params.sessionCookie;
     }
 
     return headers;
+}
+
+function responseLooksLikeAuthExpired(response: Response, bodyText: string) {
+    if ([401, 403, 419].includes(response.status)) {
+        return true;
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (!contentType.includes("text/html")) {
+        return false;
+    }
+
+    const lower = bodyText.toLowerCase();
+
+    return (
+        lower.includes('type="password"') &&
+        (lower.includes("login") ||
+            lower.includes("einloggen") ||
+            lower.includes("anmelden"))
+    );
 }
 
 export class UpstreamRateLimitError extends Error {
@@ -181,6 +203,8 @@ async function getJsonFromMytt<T>(params: {
         parse: (value: unknown) => T;
     };
     authenticated?: boolean;
+    requestingUserId?: string;
+    requiredScope?: MyttScope;
     countTowardsLocalRateLimit?: boolean;
 }): Promise<T> {
     if (!upstreamEnabled) {
@@ -188,6 +212,15 @@ async function getJsonFromMytt<T>(params: {
     }
 
     const context = getRequestContext();
+
+    let resolvedSession: ResolvedMyttSession | null = null;
+
+    if (params.authenticated) {
+        resolvedSession = await resolveMyttSessionForRequest({
+            requesterUserId: params.requestingUserId ?? context?.appUserId ?? "",
+            requiredScope: params.requiredScope ?? "ttr:read"
+        });
+    }
 
     const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
 
@@ -224,7 +257,8 @@ async function getJsonFromMytt<T>(params: {
         const response = await fetch(url, {
             method: "GET",
             headers: getMyttHeaders({
-                authenticated: params.authenticated
+                authenticated: params.authenticated,
+                sessionCookie: resolvedSession?.cookie
             })
         });
 
@@ -239,8 +273,26 @@ async function getJsonFromMytt<T>(params: {
             status: response.status,
             ok: response.ok,
             durationMs: Date.now() - startedAt,
-            localRateLimitCounted: countTowardsLocalRateLimit
+            localRateLimitCounted: countTowardsLocalRateLimit,
+            requesterUserId: resolvedSession?.requesterUserId,
+            sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
+            sessionMode: resolvedSession?.mode,
         });
+
+        const bodyText = await response.text();
+
+        if (
+            params.authenticated &&
+            resolvedSession &&
+            responseLooksLikeAuthExpired(response, bodyText)
+        ) {
+            await markMyttSessionExpired(resolvedSession.sessionOwnerUserId);
+
+            throw new MyttSessionExpiredError({
+                sessionOwnerUserId: resolvedSession.sessionOwnerUserId,
+                delegated: resolvedSession.mode === "delegated"
+            });
+        }
 
         if (response.status === 429) {
             throw new UpstreamRateLimitError();
@@ -250,7 +302,15 @@ async function getJsonFromMytt<T>(params: {
             throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
         }
 
-        const json = await response.json();
+        let json: unknown;
+
+        try {
+            json = JSON.parse(bodyText);
+        } catch {
+            throw new UpstreamError(
+                `Upstream returned non-JSON response for ${params.path}`
+            );
+        }
 
         return params.schema.parse(json);
     } catch (error) {
@@ -391,23 +451,29 @@ export async function getMeetingLive(params: {
 }
 
 export async function getPlayerTtr(params: {
+    requestingUserId: string;
     nuid: string;
 }): Promise<PlayerTtrResponse> {
     return getJsonFromMytt({
         path: `/api/ttr/player/${encodeURIComponent(params.nuid)}`,
         schema: PlayerTtrResponseSchema,
         authenticated: true,
+        requestingUserId: params.requestingUserId,
+        requiredScope: "ttr:read",
         countTowardsLocalRateLimit: false
     });
 }
 
 export async function getPlayerTtrHistory(params: {
+    requestingUserId: string;
     nuid: string;
 }): Promise<PlayerTtrHistoryResponse> {
     return getJsonFromMytt({
         path: `/api/ttr/history/${encodeURIComponent(params.nuid)}`,
         schema: PlayerTtrHistoryResponseSchema,
         authenticated: true,
+        requestingUserId: params.requestingUserId,
+        requiredScope: "ttr_history:read",
         countTowardsLocalRateLimit: false
     });
 }

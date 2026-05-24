@@ -6,6 +6,7 @@ export type RequestContext = {
     url: string;
     ip: string;
     userAgent?: string;
+    appUserId?: string | null;
 };
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();
