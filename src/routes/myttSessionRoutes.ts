@@ -81,8 +81,21 @@ export async function myttSessionRoutes(app: FastifyInstance) {
         try {
             const userId = getRequiredAppUserId(request);
 
+            const grants = await listMyttGrantsForOwner(userId);
+
+            const grantsWithUsernames = await Promise.all(
+                grants.map(async (grant) => {
+                    const grantee = await findAppUserById(grant.granteeUserId);
+
+                    return {
+                        ...grant,
+                        granteeUsername: grantee?.username ?? null
+                    };
+                })
+            );
+
             return {
-                data: await listMyttGrantsForOwner(userId)
+                data: grantsWithUsernames
             };
         } catch (error) {
             request.log.error(error);
