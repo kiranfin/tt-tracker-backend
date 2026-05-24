@@ -187,3 +187,16 @@ export async function findAppUserById(
 
     return user ? toPublicUser(user) : null;
 }
+
+export async function findAppUserByUsername(
+    usernameInput: string
+): Promise<PublicAppUser | null> {
+    const username = normalizeUsername(usernameInput);
+    const store = await readStore();
+
+    const user = Object.values(store.users).find(
+        (candidate) => candidate.username === username
+    );
+
+    return user ? toPublicUser(user) : null;
+}

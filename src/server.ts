@@ -62,18 +62,33 @@ app.addHook("onRequest", (request, reply, done) => {
     });
 });
 
+function getPathname(url: string) {
+    return url.split("?")[0] ?? url;
+}
+
+function requiresBackendApiKey(url: string) {
+    const pathname = getPathname(url);
+
+    return (
+        pathname === "/debug/status" ||
+        pathname.startsWith("/api/admin/")
+    );
+}
+
 app.addHook("preHandler", async (request, reply) => {
-    if (
-        request.url === "/health" ||
-        request.url.startsWith("/api/auth/")
-    ) {
+    if (!requiresBackendApiKey(request.url)) {
         return;
     }
 
     const expectedApiKey = process.env.TTTRACKER_API_KEY;
 
     if (!expectedApiKey) {
-        return;
+        return reply.code(503).send({
+            error: {
+                code: "API_KEY_NOT_CONFIGURED",
+                message: "Admin-Zugriff ist nicht konfiguriert."
+            }
+        });
     }
 
     const providedApiKey = request.headers["x-api-key"];

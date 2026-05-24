@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getRequiredAppUserId } from "../appUser.js";
+import { findAppUserById, findAppUserByUsername } from "../authStore.js";
 import {
     createMyttGrant,
     deleteMyttCookieForUser,
@@ -15,11 +16,21 @@ const CookieBodySchema = z.object({
     cookie: z.string().min(5)
 });
 
-const GrantBodySchema = z.object({
-    granteeUserId: z.string().min(2).max(64),
-    scopes: z.array(z.enum(["ttr:read", "ttr_history:read"])).min(1),
-    expiresAt: z.string().datetime().nullable().optional()
-});
+const GrantBodySchema = z
+    .object({
+        granteeUsername: z.string().min(2).max(32).optional(),
+        granteeUserId: z.string().min(2).max(64).optional(),
+        scopes: z.array(z.enum(["ttr:read", "ttr_history:read"])).min(1),
+        expiresAt: z.string().datetime().nullable().optional()
+    })
+    .refine(
+        (body) => Boolean(body.granteeUsername) !== Boolean(body.granteeUserId),
+        {
+            path: ["granteeUsername"],
+            message:
+                "Bitte entweder granteeUsername oder granteeUserId angeben, aber nicht beides."
+        }
+    );
 
 export async function myttSessionRoutes(app: FastifyInstance) {
     app.get("/api/me/mytt/status", async (request, reply) => {
@@ -84,15 +95,41 @@ export async function myttSessionRoutes(app: FastifyInstance) {
             const ownerUserId = getRequiredAppUserId(request);
             const body = GrantBodySchema.parse(request.body);
 
+            const grantee = body.granteeUsername
+                ? await findAppUserByUsername(body.granteeUsername)
+                : await findAppUserById(body.granteeUserId!);
+
+            if (!grantee) {
+                return reply.code(404).send({
+                    error: {
+                        code: "USER_NOT_FOUND",
+                        message: "Benutzer für diese Freigabe nicht gefunden."
+                    }
+                });
+            }
+
+            if (grantee.id === ownerUserId) {
+                return reply.code(400).send({
+                    error: {
+                        code: "SELF_GRANT_NOT_ALLOWED",
+                        message:
+                            "Du kannst dir selbst keine myTischtennis-Session freigeben."
+                    }
+                });
+            }
+
             const grant = await createMyttGrant({
                 ownerUserId,
-                granteeUserId: body.granteeUserId.trim().toLowerCase(),
+                granteeUserId: grantee.id,
                 scopes: body.scopes,
                 expiresAt: body.expiresAt ?? null
             });
 
             return {
-                data: grant
+                data: {
+                    ...grant,
+                    granteeUsername: grantee.username
+                }
             };
         } catch (error) {
             request.log.error(error);
