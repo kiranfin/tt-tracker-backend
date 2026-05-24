@@ -17,7 +17,7 @@ The backend is responsible for:
 
 The matching frontend app can be found here:
 
-[https://github.com/kiranfin/TTRTracker](https://github.com/kiranfin/TTRTracker)
+[TTRTracker App](https://github.com/kiranfin/TTRTracker)
 
 ---
 
