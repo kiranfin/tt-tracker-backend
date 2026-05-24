@@ -11,6 +11,7 @@ import { getRateLimitStatus } from "./rateLimiter.js";
 import { getUpstreamUsage } from "./upstreamTracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
+import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
 
 const app = Fastify({
     logger: true,
@@ -29,12 +30,19 @@ app.get("/health", async () => {
 });
 
 app.addHook("onRequest", (request, reply, done) => {
+    const rawAppUserId = request.headers["x-tt-user-id"];
+    const appUserId =
+        typeof rawAppUserId === "string"
+            ? rawAppUserId.trim().toLowerCase()
+            : null;
+
     const context = {
         requestId: request.id,
         method: request.method,
         url: request.url,
         ip: request.ip,
-        userAgent: request.headers["user-agent"]
+        userAgent: request.headers["user-agent"],
+        appUserId
     };
 
     requestContext.run(context, () => {
@@ -43,7 +51,8 @@ app.addHook("onRequest", (request, reply, done) => {
             method: context.method,
             url: context.url,
             ip: context.ip,
-            userAgent: context.userAgent
+            userAgent: context.userAgent,
+            appUserId: context.appUserId
         });
 
         done();
@@ -85,6 +94,7 @@ await app.register(playerRoutes);
 await app.register(clubRoutes);
 await app.register(leagueRoutes);
 await app.register(meetingRoutes);
+await app.register(myttSessionRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 

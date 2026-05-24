@@ -1,11 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
-import { CACHE_TTL } from "../constants.js";
+import { getRequiredAppUserId } from "../appUser.js";
 import { getPlayerTtr, getPlayerTtrHistory } from "../myttClient.js";
-import type {
-    PlayerTtrHistoryResponse,
-    PlayerTtrResponse
-} from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
 
 function normalizeNuid(nuid: string) {
@@ -18,41 +13,25 @@ function hasAuthError(response: { error?: unknown | null }) {
 
 export async function playerRoutes(app: FastifyInstance) {
     app.get("/api/players/:nuid/ttr", async (request, reply) => {
-        const { nuid: rawNuid } = request.params as { nuid: string };
-        const nuid = normalizeNuid(rawNuid);
-
-        if (!nuid || nuid.length < 3) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "Ungültige Spieler-ID."
-                }
-            });
-        }
-
-        const cacheKey = `player-ttr:${nuid}`;
-        const cached = getFromCache<PlayerTtrResponse>(cacheKey);
-
-        if (cached && !hasAuthError(cached) && cached.ttr != null) {
-            return {
-                data: {
-                    nuid,
-                    available: true,
-                    ttr: cached.ttr,
-                    error: null
-                },
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getPlayerTtr({ nuid });
+            const requestingUserId = getRequiredAppUserId(request);
 
-            if (!hasAuthError(result) && result.ttr != null) {
-                setCache(cacheKey, result, CACHE_TTL.PLAYER_TTR);
+            const { nuid: rawNuid } = request.params as { nuid: string };
+            const nuid = normalizeNuid(rawNuid);
+
+            if (!nuid || nuid.length < 3) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "Ungültige Spieler-ID."
+                    }
+                });
             }
+
+            const result = await getPlayerTtr({
+                requestingUserId,
+                nuid
+            });
 
             return {
                 data: {
@@ -72,46 +51,25 @@ export async function playerRoutes(app: FastifyInstance) {
     });
 
     app.get("/api/players/:nuid/ttr-history", async (request, reply) => {
-        const { nuid: rawNuid } = request.params as { nuid: string };
-        const nuid = normalizeNuid(rawNuid);
-
-        if (!nuid || nuid.length < 3) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "Ungültige Spieler-ID."
-                }
-            });
-        }
-
-        const cacheKey = `player-ttr-history:${nuid}`;
-        const cached = getFromCache<PlayerTtrHistoryResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: {
-                    nuid,
-                    available: !hasAuthError(cached),
-                    ttr: cached.ttr ?? null,
-                    qttr: cached.vq_ttr ?? null,
-                    maxTtr: cached.max_ttr ?? null,
-                    ttrDate: cached.ttr_date ?? null,
-                    maxTtrDate: cached.max_ttr_date ?? null,
-                    clubName: cached.club_name ?? null,
-                    personName: cached.person_name ?? null,
-                    events: cached.event ?? [],
-                    error: cached.error ?? null
-                },
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getPlayerTtrHistory({ nuid });
+            const requestingUserId = getRequiredAppUserId(request);
 
-            setCache(cacheKey, result, CACHE_TTL.PLAYER_TTR_HISTORY);
+            const { nuid: rawNuid } = request.params as { nuid: string };
+            const nuid = normalizeNuid(rawNuid);
+
+            if (!nuid || nuid.length < 3) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "Ungültige Spieler-ID."
+                    }
+                });
+            }
+
+            const result = await getPlayerTtrHistory({
+                requestingUserId,
+                nuid
+            });
 
             return {
                 data: {
