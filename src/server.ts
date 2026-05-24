@@ -12,6 +12,9 @@ import { getUpstreamUsage } from "./upstreamTracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
 import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
+import { authRoutes } from "./routes/authRoutes.js";
+import { attachOptionalAppUser } from "./authRequest.js";
+import { getRequestContext } from "./requestContext.js";
 
 const app = Fastify({
     logger: true,
@@ -60,7 +63,10 @@ app.addHook("onRequest", (request, reply, done) => {
 });
 
 app.addHook("preHandler", async (request, reply) => {
-    if (request.url === "/health") {
+    if (
+        request.url === "/health" ||
+        request.url.startsWith("/api/auth/")
+    ) {
         return;
     }
 
@@ -82,6 +88,27 @@ app.addHook("preHandler", async (request, reply) => {
     }
 });
 
+app.addHook("preHandler", async (request, reply) => {
+    try {
+        const user = await attachOptionalAppUser(request);
+
+        const context = getRequestContext();
+
+        if (context) {
+            context.appUserId = user?.id ?? null;
+        }
+    } catch (error) {
+        request.log.error(error);
+
+        return reply.code(401).send({
+            error: {
+                code: "INVALID_TOKEN",
+                message: "Login ist ungültig oder abgelaufen. Bitte erneut einloggen."
+            }
+        });
+    }
+});
+
 app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
@@ -89,6 +116,7 @@ app.get("/debug/status", async () => {
     };
 });
 
+await app.register(authRoutes);
 await app.register(searchRoutes);
 await app.register(playerRoutes);
 await app.register(clubRoutes);

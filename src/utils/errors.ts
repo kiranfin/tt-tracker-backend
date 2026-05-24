@@ -11,6 +11,7 @@ import {
     UpstreamError,
     UpstreamRateLimitError
 } from "../myttClient.js";
+import { InvalidTokenError } from "../authToken.js";
 
 export function handleApiError(error: unknown, reply: FastifyReply) {
     if (error instanceof ZodError) {
@@ -19,6 +20,15 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
                 code: "INVALID_INPUT",
                 message: "Ungültige Eingabe.",
                 details: error.flatten()
+            }
+        });
+    }
+
+    if (error instanceof InvalidTokenError) {
+        return reply.code(401).send({
+            error: {
+                code: "INVALID_TOKEN",
+                message: "Login ist ungültig oder abgelaufen. Bitte erneut einloggen."
             }
         });
     }
