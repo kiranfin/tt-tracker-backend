@@ -4,6 +4,12 @@ This repository contains the backend for the **TTR Tracker** app.
 
 The backend acts as a small Node.js/Fastify server between the mobile app and the unofficial myTischtennis data endpoints. It serves as a defensive proxy to ensure that the app does not directly communicate with myTischtennis.
 
+### ⚠️ Disclaimer ⚠️
+
+This repository was developed quickly and is still a work in progress. It is not finished and may contain errors, bugs, incomplete features, or unstable behavior.
+
+Use it at your own risk. Contributions, feedback, and improvements are welcome.
+
 ## Table of Contents
 - [Responsibilities](#responsibilities)
 - [Requirements](#requirements)
