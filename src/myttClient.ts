@@ -82,42 +82,6 @@ function responseLooksLikeAuthExpired(response: Response, bodyText: string) {
     );
 }
 
-type PaginatedSearchResponse = {
-    results: unknown[];
-    total_count?: number;
-    pages_count?: number;
-    page?: number;
-    pagesize?: number;
-};
-
-function paginateSearchResponse<T extends PaginatedSearchResponse>(
-    response: T,
-    requestedPage: number,
-    requestedPagesize: number
-): T {
-    const results = Array.isArray(response.results) ? response.results : [];
-
-    const totalCount =
-        typeof response.total_count === "number" && Number.isFinite(response.total_count)
-            ? response.total_count
-            : results.length;
-
-    const pagesCount = Math.max(1, Math.ceil(totalCount / requestedPagesize));
-    const safePage = Math.min(Math.max(1, requestedPage), pagesCount);
-
-    const start = (safePage - 1) * requestedPagesize;
-    const end = start + requestedPagesize;
-
-    return {
-        ...response,
-        results: results.slice(start, end),
-        total_count: totalCount,
-        pages_count: pagesCount,
-        page: safePage,
-        pagesize: requestedPagesize
-    };
-}
-
 export class UpstreamRateLimitError extends Error {
     constructor() {
         super("myTischtennis rate limit reached");
@@ -312,7 +276,7 @@ async function getJsonFromMytt<T>(params: {
             localRateLimitCounted: countTowardsLocalRateLimit,
             requesterUserId: resolvedSession?.requesterUserId,
             sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
-            sessionMode: resolvedSession?.mode
+            sessionMode: resolvedSession?.mode,
         });
 
         const bodyText = await response.text();
@@ -372,22 +336,17 @@ export async function searchPlayers(params: {
     page?: number;
     pagesize?: number;
 }): Promise<PlayerSearchResponse> {
-    const page = params.page ?? 1;
-    const pagesize = params.pagesize ?? 8;
-
     const body = new URLSearchParams({
         query: params.query,
-        page: "1",
-        pagesize: "100"
+        page: String(params.page ?? 1),
+        pagesize: String(params.pagesize ?? 8)
     });
 
-    const result = await postFormToMytt({
+    return postFormToMytt({
         path: "/api/search/players",
         body,
         schema: PlayerSearchResponseSchema
     });
-
-    return paginateSearchResponse(result, page, pagesize);
 }
 
 export async function searchClubs(params: {
@@ -395,22 +354,17 @@ export async function searchClubs(params: {
     page?: number;
     pagesize?: number;
 }): Promise<ClubSearchResponse> {
-    const page = params.page ?? 1;
-    const pagesize = params.pagesize ?? 8;
-
     const body = new URLSearchParams({
         query: params.query,
-        page: "1",
-        pagesize: "100"
+        page: String(params.page ?? 1),
+        pagesize: String(params.pagesize ?? 8)
     });
 
-    const result = await postFormToMytt({
+    return postFormToMytt({
         path: "/api/search/clubs",
         body,
         schema: ClubSearchResponseSchema
     });
-
-    return paginateSearchResponse(result, page, pagesize);
 }
 
 export async function getClubTeams(params: {
