@@ -181,7 +181,7 @@ export const TeamPlayerSchema = z
 
 export const TeamPlayersResponseSchema = z
     .object({
-        data: z.array(TeamPlayerSchema).default([]),
+        data: z.array(z.unknown()).default([]),
         error: z.unknown().nullable().optional()
     })
     .passthrough();
@@ -199,7 +199,7 @@ export const TeamSimpleScheduleItemSchema = z
 
 export const TeamSimpleScheduleResponseSchema = z
     .object({
-        data: z.array(TeamSimpleScheduleItemSchema).default([]),
+        data: z.array(z.unknown()).default([]),
         error: z.unknown().nullable().optional()
     })
     .passthrough();
@@ -271,7 +271,7 @@ export const TeamInfoResponseSchema = z
 export const TeamScheduleDataSchema = z
     .object({
         head_infos: TeamHeadInfosSchema.nullable().optional(),
-        schedule: z.array(LeagueScheduleMeetingSchema).default([]),
+        schedule: z.array(z.unknown()).default([]),
         meetings_excerpt: TeamMeetingsExcerptSchema.nullable().optional()
     })
     .passthrough();
@@ -311,7 +311,7 @@ export const TeamBalancePlayerSchema = z
 export const TeamBalancesDataSchema = z
     .object({
         head_infos: TeamHeadInfosSchema.nullable().optional(),
-        player_balances: z.array(TeamBalancePlayerSchema).default([]),
+        player_balances: z.array(z.unknown()).default([]),
         meetings_excerpt: TeamMeetingsExcerptSchema.nullable().optional()
     })
     .passthrough();
