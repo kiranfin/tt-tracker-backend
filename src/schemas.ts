@@ -442,6 +442,48 @@ export const PlayerTtrHistoryResponseSchema = z
     })
     .passthrough();
 
+export const ClubScheduleLocationSchema = z
+    .object({
+        label: z.string().nullable().optional(),
+        city: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const ClubScheduleMeetingSchema = z
+    .object({
+        date: z.string().nullable().optional(),
+        state: z.string().nullable().optional(),
+        team_home: z.string().nullable().optional(),
+        team_away: z.string().nullable().optional(),
+        team_home_id: z.union([z.string(), z.number()]).nullable().optional(),
+        team_away_id: z.union([z.string(), z.number()]).nullable().optional(),
+        matches_won: z.union([z.string(), z.number()]).nullable().optional(),
+        matches_lost: z.union([z.string(), z.number()]).nullable().optional(),
+        meeting_id: z.union([z.string(), z.number()]).nullable().optional(),
+        league_name: z.string().nullable().optional(),
+        league_short_name: z.string().nullable().optional(),
+        location: ClubScheduleLocationSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const ClubScheduleResponseSchema = z
+    .object({
+        data: z
+            .object({
+                head_infos: z.record(z.unknown()).nullable().optional(),
+                club_name: z.string().nullable().optional(),
+                meetings: z.array(ClubScheduleMeetingSchema).optional().default([]),
+                meetings_by_date: z.unknown().optional()
+            })
+            .passthrough(),
+        season: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
+export type ClubScheduleResponse = z.infer<typeof ClubScheduleResponseSchema>;
+
 export type MeetingPlayer = z.infer<typeof MeetingPlayerSchema>;
 export type MeetingMatch = z.infer<typeof MeetingMatchSchema>;
 export type MeetingLiveData = z.infer<typeof MeetingLiveDataSchema>;
