@@ -1,12 +1,23 @@
 import type { FastifyInstance } from "fastify";
 import { getFromCache, setCache } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
-import { getClubSchedule, getClubTeams } from "../myttClient.js";
-import type { ClubScheduleResponse, ClubTeamsResponse } from "../schemas.js";
+import {
+    getClubPlayersFromAndroRanking,
+    getClubSchedule,
+    getClubTeams
+} from "../myttClient.js";
+import type {
+    ClubPlayersResponse,
+    ClubScheduleResponse,
+    ClubTeamsResponse
+} from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
 
 const CLUB_SCHEDULE_CACHE_TTL =
     (CACHE_TTL as Record<string, number>).CLUB_SCHEDULE ?? CACHE_TTL.CLUB_TEAMS;
+
+const CLUB_PLAYERS_CACHE_TTL =
+    (CACHE_TTL as Record<string, number>).CLUB_PLAYERS ?? CACHE_TTL.CLUB_TEAMS;
 
 function getDefaultSeasonDates(season: string) {
     const match = /^(\d{2})--(\d{2})$/.exec(season);
@@ -65,6 +76,70 @@ export async function clubRoutes(app: FastifyInstance) {
             });
 
             setCache(cacheKey, result, CACHE_TTL.CLUB_TEAMS);
+
+            return {
+                data: result,
+                meta: {
+                    source: "upstream"
+                }
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
+    app.get("/api/clubs/:organization/:clubNumber/players", async (request, reply) => {
+        const params = request.params as {
+            organization?: string;
+            clubNumber?: string;
+        };
+
+        const query = request.query as {
+            androClubNr?: string;
+            andro_club_nr?: string;
+        };
+
+        const organization = params.organization?.trim().toUpperCase() ?? "";
+        const clubNumber = params.clubNumber?.trim() ?? "";
+        const androClubNr =
+            query.androClubNr?.trim() || query.andro_club_nr?.trim() || undefined;
+
+        if (!organization || !clubNumber) {
+            return reply.code(400).send({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "organization und clubNumber sind erforderlich."
+                }
+            });
+        }
+
+        const cacheKey = [
+            "club-players-andro",
+            organization,
+            clubNumber,
+            androClubNr ?? ""
+        ].join(":");
+
+        const cached = getFromCache<ClubPlayersResponse>(cacheKey);
+
+        if (cached) {
+            return {
+                data: cached,
+                meta: {
+                    source: "cache"
+                }
+            };
+        }
+
+        try {
+            const result = await getClubPlayersFromAndroRanking({
+                organization,
+                clubNumber,
+                androClubNr
+            });
+
+            setCache(cacheKey, result, CLUB_PLAYERS_CACHE_TTL);
 
             return {
                 data: result,

@@ -54,6 +54,67 @@ export const ClubTeamsResponseSchema = z.object({
     error: z.unknown().nullable().optional()
 });
 
+export const ClubPlayerSchema = z
+    .object({
+        person_id: z.string().nullable().optional(),
+        internal_id: z.string().nullable().optional(),
+
+        firstname: z.string().nullable().optional(),
+        lastname: z.string().nullable().optional(),
+        full_name: z.string().nullable().optional(),
+
+        ttr: StringOrNumberSchema.nullable().optional(),
+        qttr: StringOrNumberSchema.nullable().optional(),
+        player_qttr: StringOrNumberSchema.nullable().optional(),
+
+        rank: StringOrNumberSchema.nullable().optional(),
+        club_rank: StringOrNumberSchema.nullable().optional(),
+        global_rank: StringOrNumberSchema.nullable().optional(),
+        national_rank: StringOrNumberSchema.nullable().optional(),
+
+        gender: z.string().nullable().optional(),
+        gender_raw: z.string().nullable().optional(),
+        country: z.string().nullable().optional(),
+        continent: z.string().nullable().optional(),
+
+        club_nr: z.string().nullable().optional(),
+        clicktt_club_id: z.string().nullable().optional(),
+        club_name: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+
+        match_count: StringOrNumberSchema.nullable().optional(),
+        few_games: StringOrNumberSchema.nullable().optional(),
+        last_year_no_games: z.string().nullable().optional(),
+
+        club_sex_rank: StringOrNumberSchema.nullable().optional(),
+        german_sex_rank: StringOrNumberSchema.nullable().optional(),
+
+        external_id: z.string().nullable().optional(),
+        player_url: z.string().nullable().optional(),
+
+        ranking_id: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const ClubPlayersResponseSchema = z
+    .object({
+        data: z.array(ClubPlayerSchema).default([]),
+        pagination: z
+            .object({
+                page: z.number().optional(),
+                page_size: z.number().optional(),
+                pages_count: z.number().optional(),
+                total_count: z.number().optional(),
+                max_rows: z.number().nullable().optional()
+            })
+            .passthrough(),
+        access_level: z.string().nullable().optional(),
+        source_path: z.string().nullable().optional(),
+        page_url: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
 export const LeagueTableRowSchema = z.object({
     club_id: StringOrNumberSchema.nullable().optional(),
     team_id: StringOrNumberSchema.nullable().optional(),
@@ -518,6 +579,9 @@ export type TeamInfoResponse = z.infer<typeof TeamInfoResponseSchema>;
 export type TeamScheduleResponse = z.infer<typeof TeamScheduleResponseSchema>;
 export type TeamBalancesResponse = z.infer<typeof TeamBalancesResponseSchema>;
 export type TeamBalancePlayer = z.infer<typeof TeamBalancePlayerSchema>;
+
+export type ClubPlayer = z.infer<typeof ClubPlayerSchema>;
+export type ClubPlayersResponse = z.infer<typeof ClubPlayersResponseSchema>;
 
 export type ApiResponse<T> = {
     data: T;

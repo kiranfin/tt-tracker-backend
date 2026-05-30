@@ -2,6 +2,7 @@ import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
     ClubTeamsResponseSchema,
+    ClubPlayersResponseSchema,
     ClubScheduleResponseSchema,
     LeagueTableResponseSchema,
     LeagueScheduleResponseSchema,
@@ -21,6 +22,7 @@ import type {
     PlayerSearchResponse,
     ClubSearchResponse,
     ClubTeamsResponse,
+    ClubPlayersResponse,
     ClubScheduleResponse,
     LeagueTableResponse,
     PlayerTtrResponse,
@@ -218,6 +220,7 @@ async function getJsonFromMytt<T>(params: {
     requestingUserId?: string;
     requiredScope?: MyttScope;
     countTowardsLocalRateLimit?: boolean;
+    extraHeaders?: Record<string, string>;
 }): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
@@ -270,7 +273,8 @@ async function getJsonFromMytt<T>(params: {
             method: "GET",
             headers: getMyttHeaders({
                 authenticated: params.authenticated,
-                sessionCookie: resolvedSession?.cookie
+                sessionCookie: resolvedSession?.cookie,
+                extraHeaders: params.extraHeaders
             })
         });
 
@@ -512,6 +516,268 @@ export async function getClubTeams(params: {
         path: "/api/ttr/teams",
         searchParams,
         schema: ClubTeamsResponseSchema
+    });
+}
+
+const ANDRO_CLUB_NR_OVERRIDES: Record<string, string> = {
+    // click-TT-Club-ID -> klassische andro-Ranglisten-Vereinsnummer
+    // TTV Pleidelsheim
+    "TTBW:2055064": "08065"
+};
+
+const ANDRO_ASSOCIATION_PATTERNS: Record<string, string> = {
+    TTBW: "DE.SW.R5.20"
+};
+
+function getAndroClubNr(params: {
+    organization: string;
+    clubNumber: string;
+    androClubNr?: string;
+}) {
+    if (params.androClubNr?.trim()) {
+        return params.androClubNr.trim();
+    }
+
+    return (
+        ANDRO_CLUB_NR_OVERRIDES[
+            `${params.organization.toUpperCase()}:${params.clubNumber}`
+            ] ?? params.clubNumber
+    );
+}
+
+function getAndroAssociationPattern(organization: string) {
+    return ANDRO_ASSOCIATION_PATTERNS[organization.toUpperCase()] ?? "all";
+}
+
+function asNullableString(value: unknown): string | null {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+    }
+
+    return null;
+}
+
+function asNullableNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+
+    if (typeof value === "string" && value.trim().length > 0) {
+        const numberValue = Number(value);
+
+        if (Number.isFinite(numberValue)) {
+            return numberValue;
+        }
+    }
+
+    return null;
+}
+
+function normalizeAndroGender(value: unknown): string | null {
+    const gender = asNullableString(value);
+
+    if (gender === "male") {
+        return "m";
+    }
+
+    if (gender === "female") {
+        return "w";
+    }
+
+    return gender;
+}
+
+function getAndroRankingRoot(value: unknown): Record<string, unknown> {
+    const direct = asRecord(value);
+
+    if (Object.keys(asRecord(direct.blockLoaderData)).length > 0) {
+        return direct;
+    }
+
+    const pageContent = asRecord(direct.pageContent);
+
+    if (Object.keys(asRecord(pageContent.blockLoaderData)).length > 0) {
+        return pageContent;
+    }
+
+    return direct;
+}
+
+function findAndroRankingBlock(value: unknown): Record<string, unknown> | null {
+    const root = getAndroRankingRoot(value);
+    const blockLoaderData = asRecord(root.blockLoaderData);
+
+    for (const block of Object.values(blockLoaderData)) {
+        const record = asRecord(block);
+
+        if (Array.isArray(record.entries)) {
+            return record;
+        }
+    }
+
+    return null;
+}
+
+function normalizeAndroRankingResponse(params: {
+    value: unknown;
+    organization: string;
+    clickttClubId: string;
+    androClubNr: string;
+    sourcePath: string;
+}): ClubPlayersResponse {
+    const root = getAndroRankingRoot(params.value);
+    const block = findAndroRankingBlock(params.value);
+
+    if (!block) {
+        return ClubPlayersResponseSchema.parse({
+            data: [],
+            pagination: {
+                page: 1,
+                page_size: 100,
+                pages_count: 0,
+                total_count: 0,
+                max_rows: null
+            },
+            access_level: asNullableString(root.userContentAccessLevel),
+            source_path: params.sourcePath,
+            page_url: asNullableString(root.pageUrl),
+            error: null
+        });
+    }
+
+    const entries = Array.isArray(block.entries) ? block.entries : [];
+
+    const data = entries.map((rawEntry) => {
+        const entry = asRecord(rawEntry);
+
+        const firstname = asNullableString(entry.firstname) ?? "";
+        const lastname = asNullableString(entry.lastname) ?? "";
+        const fullName = `${firstname} ${lastname}`.trim();
+
+        const personId = asNullableString(entry.personId);
+        const externalId = asNullableString(entry.external_id);
+        const association =
+            asNullableString(entry.fedNickname) ?? params.organization;
+        const clubNr = asNullableString(entry.clubNr) ?? params.androClubNr;
+        const position = asNullableNumber(entry.position);
+
+        // @ts-ignore
+        return {
+            person_id: personId,
+            internal_id: personId,
+
+            firstname,
+            lastname,
+            full_name: fullName,
+
+            ttr: asNullableNumber(entry.fedRank),
+            qttr: asNullableNumber(entry.fedRank),
+            player_qttr: asNullableNumber(entry.fedRank),
+
+            rank: position,
+            club_rank: position,
+            global_rank: asNullableNumber(entry.rank),
+            national_rank: asNullableNumber(entry.germanRank),
+
+            gender: normalizeAndroGender(entry.gender),
+            gender_raw: asNullableString(entry.gender),
+            country: asNullableString(entry.country),
+            continent: asNullableString(entry.continent),
+
+            club_nr: clubNr,
+            clicktt_club_id: params.clickttClubId,
+            club_name: asNullableString(entry.clubName),
+            association,
+
+            match_count: asNullableNumber(entry.matchCount),
+            few_games: asNullableNumber(entry.fewGames),
+            last_year_no_games: asNullableString(entry.lastYearNoGames),
+
+            club_sex_rank: asNullableNumber(entry.clubSexRank),
+            german_sex_rank: asNullableNumber(entry.germanSexRank),
+
+            external_id: externalId,
+            player_url: externalId
+                ? `https://www.mytischtennis.de/community/external-profile?user-id=${externalId}`
+                : null,
+
+            ranking_id: [
+                association,
+                clubNr,
+                position ?? "unknown",
+                (personId ?? fullName) || "unknown"
+            ].join(":")
+        };
+    });
+
+    return ClubPlayersResponseSchema.parse({
+        data,
+        pagination: {
+            page: (asNullableNumber(block.currentPage) ?? 0) + 1,
+            page_size: asNullableNumber(block.resultsPerPage) ?? 100,
+            pages_count: asNullableNumber(block.numberOfPages) ?? 0,
+            total_count: asNullableNumber(block.resultLength) ?? data.length,
+            max_rows: asNullableNumber(block.maxRows)
+        },
+        access_level: asNullableString(root.userContentAccessLevel),
+        source_path: params.sourcePath,
+        page_url: asNullableString(root.pageUrl),
+        error: null
+    });
+}
+
+export async function getClubPlayersFromAndroRanking(params: {
+    organization: string;
+    clubNumber: string;
+    androClubNr?: string;
+}): Promise<ClubPlayersResponse> {
+    const organization = params.organization.trim().toUpperCase();
+    const androClubNr = getAndroClubNr({
+        organization,
+        clubNumber: params.clubNumber,
+        androClubNr: params.androClubNr
+    });
+
+    const searchParams = new URLSearchParams({
+        clubnr: androClubNr,
+        fednickname: organization,
+        continent: "all",
+        country: "all",
+        gender: "all",
+        as: getAndroAssociationPattern(organization),
+        "birth-range": "1926;2021",
+        "ttr-range": "100;3000",
+        "results-per-page": "100",
+        page: "1",
+        "current-ranking": "yes",
+        "all-players": "on",
+        _data: "routes/$"
+    });
+
+    const sourcePath = `/rankings/andro-rangliste?${searchParams.toString()}`;
+
+    return getJsonFromMytt({
+        path: "/rankings/andro-rangliste",
+        searchParams,
+        schema: {
+            parse: (value) =>
+                normalizeAndroRankingResponse({
+                    value,
+                    organization,
+                    clickttClubId: params.clubNumber,
+                    androClubNr,
+                    sourcePath
+                })
+        },
+        extraHeaders: {
+            // Die Anfrage bleibt technisch die gleiche wie dein funktionierender curl.
+            // Der Header hilft, falls myTischtennis Node/undici blockt.
+            "user-agent": "curl/8.4.0"
+        }
     });
 }
 
