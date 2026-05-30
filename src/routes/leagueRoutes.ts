@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getFromCache, setCache } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
-import { getLeagueSchedule, getLeagueTable, getLeagueTableHtml } from "../myttClient.js";
+import { getLeagueSchedule, getLeagueTable } from "../myttClient.js";
 import type {
     LeagueScheduleResponse,
     LeagueTableResponse
