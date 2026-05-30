@@ -166,6 +166,166 @@ export const LeagueScheduleResponseSchema = z.object({
     }).optional()
 });
 
+export const TeamPlayerSchema = z
+    .object({
+        firstname: z.string().nullable().optional(),
+        lastname: z.string().nullable().optional(),
+        internal_id: z.string().nullable().optional(),
+        rank: StringOrNumberSchema.nullable().optional(),
+        team_number: StringOrNumberSchema.nullable().optional(),
+        player_qttr: StringOrNumberSchema.nullable().optional(),
+        player_status: z.string().nullable().optional(),
+        foreigner_type: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamPlayersResponseSchema = z
+    .object({
+        data: z.array(TeamPlayerSchema).default([]),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamSimpleScheduleItemSchema = z
+    .object({
+        opponent_team_id: StringOrNumberSchema.nullable().optional(),
+        opponent_team_name: z.string().nullable().optional(),
+        date: z.string().nullable().optional(),
+        matches_won: StringOrNumberSchema.nullable().optional(),
+        matches_lost: StringOrNumberSchema.nullable().optional(),
+        meeting_id: StringOrNumberSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const TeamSimpleScheduleResponseSchema = z
+    .object({
+        data: z.array(TeamSimpleScheduleItemSchema).default([]),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamHeadInfosSchema = z
+    .object({
+        season: z.string().nullable().optional(),
+        play_mode: z.string().nullable().optional(),
+        league_name: z.string().nullable().optional(),
+        championship: z.string().nullable().optional(),
+        gender_age_group: z.string().nullable().optional(),
+        organization_short: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamContactSchema = z
+    .object({
+        contact_name: z.string().nullable().optional(),
+        street: z.string().nullable().optional(),
+        zipcode: z.string().nullable().optional(),
+        city: z.string().nullable().optional(),
+        phone_home: z.string().nullable().optional(),
+        phone_work: z.string().nullable().optional(),
+        phone_mobile: z.string().nullable().optional(),
+        email_home: z.string().nullable().optional(),
+        email_work: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamVenueSchema = z
+    .object({
+        label: z.string().nullable().optional(),
+        street: z.string().nullable().optional(),
+        zipcode: z.string().nullable().optional(),
+        city: z.string().nullable().optional(),
+        website: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamMeetingsExcerptSchema = z
+    .object({
+        remarks: z.unknown().nullable().optional(),
+        meetings: z.array(z.unknown()).default([]),
+        round_type: z.string().nullable().optional(),
+        pdf_version_url: z.string().nullable().optional(),
+        pdf_materials_url: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamInfoDataSchema = z
+    .object({
+        head_infos: TeamHeadInfosSchema.nullable().optional(),
+        team_contact: TeamContactSchema.nullable().optional(),
+        venue: TeamVenueSchema.nullable().optional(),
+        team_photo_url: z.string().nullable().optional(),
+        meetings_excerpt: TeamMeetingsExcerptSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const TeamInfoResponseSchema = z
+    .object({
+        data: TeamInfoDataSchema.nullable().optional(),
+        season: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamScheduleDataSchema = z
+    .object({
+        head_infos: TeamHeadInfosSchema.nullable().optional(),
+        schedule: z.array(LeagueScheduleMeetingSchema).default([]),
+        meetings_excerpt: TeamMeetingsExcerptSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const TeamScheduleResponseSchema = z
+    .object({
+        data: TeamScheduleDataSchema.nullable().optional(),
+        season: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+        season_filter: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
+export const TeamBalanceSplitSchema = z
+    .object({
+        opponent_rank: StringOrNumberSchema.nullable().optional(),
+        points_won: StringOrNumberSchema.nullable().optional(),
+        points_lost: StringOrNumberSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const TeamBalancePlayerSchema = z
+    .object({
+        player_id: z.string().nullable().optional(),
+        player_firstname: z.string().nullable().optional(),
+        player_lastname: z.string().nullable().optional(),
+        meetings_count: StringOrNumberSchema.nullable().optional(),
+        points_won: StringOrNumberSchema.nullable().optional(),
+        points_lost: StringOrNumberSchema.nullable().optional(),
+        player_rank: StringOrNumberSchema.nullable().optional(),
+        team_number: StringOrNumberSchema.nullable().optional(),
+        single_statistics: z.array(TeamBalanceSplitSchema).default([])
+    })
+    .passthrough();
+
+export const TeamBalancesDataSchema = z
+    .object({
+        head_infos: TeamHeadInfosSchema.nullable().optional(),
+        player_balances: z.array(TeamBalancePlayerSchema).default([]),
+        meetings_excerpt: TeamMeetingsExcerptSchema.nullable().optional()
+    })
+    .passthrough();
+
+export const TeamBalancesResponseSchema = z
+    .object({
+        data: TeamBalancesDataSchema.nullable().optional(),
+        season: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+        season_filter: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
 export const MeetingPlayerSchema = z
     .object({
         firstname: z.string().nullable().optional(),
@@ -305,6 +465,17 @@ export type ClubTeamsResponse = z.infer<typeof ClubTeamsResponseSchema>;
 export type PlayerTtrResponse = z.infer<typeof PlayerTtrResponseSchema>;
 export type PlayerTtrHistoryResponse = z.infer<typeof PlayerTtrHistoryResponseSchema>;
 export type PlayerTtrEvent = z.infer<typeof PlayerTtrEventSchema>;
+
+export type TeamPlayer = z.infer<typeof TeamPlayerSchema>;
+export type TeamPlayersResponse = z.infer<typeof TeamPlayersResponseSchema>;
+
+export type TeamSimpleScheduleItem = z.infer<typeof TeamSimpleScheduleItemSchema>;
+export type TeamSimpleScheduleResponse = z.infer<typeof TeamSimpleScheduleResponseSchema>;
+
+export type TeamInfoResponse = z.infer<typeof TeamInfoResponseSchema>;
+export type TeamScheduleResponse = z.infer<typeof TeamScheduleResponseSchema>;
+export type TeamBalancesResponse = z.infer<typeof TeamBalancesResponseSchema>;
+export type TeamBalancePlayer = z.infer<typeof TeamBalancePlayerSchema>;
 
 export type ApiResponse<T> = {
     data: T;

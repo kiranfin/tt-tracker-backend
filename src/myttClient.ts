@@ -8,7 +8,12 @@ import {
     MeetingLiveResponseSchema,
     MeetingLiveResponse,
     PlayerTtrResponseSchema,
-    PlayerTtrHistoryResponseSchema
+    PlayerTtrHistoryResponseSchema,
+    TeamPlayersResponseSchema,
+    TeamSimpleScheduleResponseSchema,
+    TeamInfoResponseSchema,
+    TeamScheduleResponseSchema,
+    TeamBalancesResponseSchema
 } from "./schemas.js";
 
 import type {
@@ -17,7 +22,12 @@ import type {
     ClubTeamsResponse,
     LeagueTableResponse,
     PlayerTtrResponse,
-    PlayerTtrHistoryResponse
+    PlayerTtrHistoryResponse,
+    TeamPlayersResponse,
+    TeamSimpleScheduleResponse,
+    TeamInfoResponse,
+    TeamScheduleResponse,
+    TeamBalancesResponse
 } from "./schemas.js";
 
 import {
@@ -663,5 +673,148 @@ export async function getPlayerTtrHistory(params: {
         requestingUserId: params.requestingUserId,
         requiredScope: "ttr_history:read",
         countTowardsLocalRateLimit: false
+    });
+}
+
+type TeamRoundFilter = "gesamt" | "vr" | "rr";
+
+function buildTeamContextPath(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    teamId: string;
+    teamNameSlug?: string;
+    page: "infos" | "spielplan" | "spielerbilanzen";
+    filter?: TeamRoundFilter;
+}) {
+    const leagueSlug = toLeagueSlug(params.leagueSlug);
+    const teamNameSlug = params.teamNameSlug?.trim() || "x";
+
+    const segments = [
+        "click-tt",
+        params.association,
+        params.season,
+        "ligen",
+        leagueSlug,
+        "gruppe",
+        params.groupId,
+        "mannschaft",
+        params.teamId,
+        teamNameSlug,
+        params.page
+    ];
+
+    if (params.filter) {
+        segments.push(params.filter);
+    }
+
+    return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+}
+
+export async function getTeamPlayers(params: {
+    teamId: string;
+}): Promise<TeamPlayersResponse> {
+    const searchParams = new URLSearchParams({
+        teamId: params.teamId
+    });
+
+    return getJsonFromMytt({
+        path: "/api/ttr/team/players",
+        searchParams,
+        schema: TeamPlayersResponseSchema
+    });
+}
+
+export async function getTeamSimpleSchedule(params: {
+    teamId: string;
+    season: string;
+}): Promise<TeamSimpleScheduleResponse> {
+    const searchParams = new URLSearchParams({
+        teamId: params.teamId,
+        season: params.season
+    });
+
+    return getJsonFromMytt({
+        path: "/api/ttr/team/schedule",
+        searchParams,
+        schema: TeamSimpleScheduleResponseSchema
+    });
+}
+
+export async function getTeamInfos(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    teamId: string;
+    teamNameSlug?: string;
+}): Promise<TeamInfoResponse> {
+    const searchParams = new URLSearchParams({
+        _data:
+            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/infos"
+    });
+
+    return getJsonFromMytt({
+        path: buildTeamContextPath({
+            ...params,
+            page: "infos"
+        }),
+        searchParams,
+        schema: TeamInfoResponseSchema
+    });
+}
+
+export async function getTeamSchedule(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    teamId: string;
+    teamNameSlug?: string;
+    filter?: TeamRoundFilter;
+}): Promise<TeamScheduleResponse> {
+    const filter = params.filter ?? "gesamt";
+
+    const searchParams = new URLSearchParams({
+        _data:
+            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielplan.$filter"
+    });
+
+    return getJsonFromMytt({
+        path: buildTeamContextPath({
+            ...params,
+            page: "spielplan",
+            filter
+        }),
+        searchParams,
+        schema: TeamScheduleResponseSchema
+    });
+}
+
+export async function getTeamBalances(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    teamId: string;
+    teamNameSlug?: string;
+    filter?: TeamRoundFilter;
+}): Promise<TeamBalancesResponse> {
+    const filter = params.filter ?? "gesamt";
+
+    const searchParams = new URLSearchParams({
+        _data:
+            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielerbilanzen.$filter"
+    });
+
+    return getJsonFromMytt({
+        path: buildTeamContextPath({
+            ...params,
+            page: "spielerbilanzen",
+            filter
+        }),
+        searchParams,
+        schema: TeamBalancesResponseSchema
     });
 }
