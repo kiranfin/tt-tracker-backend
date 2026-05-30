@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getFromCache, setCache } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
-import { getLeagueSchedule, getLeagueTable } from "../myttClient.js";
+import { getLeagueSchedule, getLeagueTable, getLeagueTableHtml } from "../myttClient.js";
 import type {
     LeagueScheduleResponse,
     LeagueTableResponse
@@ -879,25 +879,40 @@ export async function leagueRoutes(app: FastifyInstance) {
         );
     });
 
-    app.get("/api/leagues/:association/:groupId/table", async (request, reply) => {
+    app.get("/api/leagues/:association/:season/:groupId/table", async (request, reply) => {
         const params = request.params as {
             association?: string;
+            season?: string;
             groupId?: string;
         };
 
-        const association = params.association?.trim().toUpperCase() ?? "";
-        const groupId = params.groupId?.trim() ?? "";
+        const query = request.query as {
+            leagueSlug?: string;
+            filter?: string;
+        };
 
-        if (!association || !groupId) {
+        const association = params.association?.trim().toUpperCase() ?? "";
+        const season = normalizeSeason(params.season);
+        const groupId = params.groupId?.trim() ?? "";
+        const leagueSlug = query.leagueSlug?.trim() || "x";
+
+        const filter =
+            query.filter === "vr" ||
+            query.filter === "rr" ||
+            query.filter === "gesamt"
+                ? query.filter
+                : "gesamt";
+
+        if (!association || !season || !groupId) {
             return reply.code(400).send({
                 error: {
                     code: "INVALID_INPUT",
-                    message: "association und groupId sind erforderlich."
+                    message: "association, season und groupId sind erforderlich."
                 }
             });
         }
 
-        const cacheKey = `league-table:${association}:${groupId}`;
+        const cacheKey = `league-table:${association}:${season}:${groupId}:${leagueSlug}:${filter}`;
         const cached = getFromCache<LeagueTableResponse>(cacheKey);
 
         if (cached) {
@@ -912,7 +927,10 @@ export async function leagueRoutes(app: FastifyInstance) {
         try {
             const result = await getLeagueTable({
                 association,
-                groupId
+                season,
+                groupId,
+                leagueSlug,
+                filter
             });
 
             setCache(cacheKey, result, CACHE_TTL.LEAGUE_TABLE);

@@ -331,6 +331,126 @@ async function getJsonFromMytt<T>(params: {
     }
 }
 
+async function getTextFromMytt(params: {
+    path: string;
+    searchParams?: URLSearchParams;
+    countTowardsLocalRateLimit?: boolean;
+}): Promise<string> {
+    if (!upstreamEnabled) {
+        throw new UpstreamDisabledError();
+    }
+
+    const context = getRequestContext();
+
+    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
+
+    if (countTowardsLocalRateLimit) {
+        try {
+            assertCanCallUpstream();
+        } catch (error) {
+            void writeJsonLog("mytt_upstream_blocked", {
+                requestId: context?.requestId,
+                clientIp: context?.ip,
+                backendMethod: context?.method,
+                backendUrl: context?.url,
+                reason: "local_rate_limit",
+                myttMethod: "GET",
+                myttPath: params.path
+            });
+
+            throw error;
+        }
+    }
+
+    const url = new URL(`${MYTT_BASE_URL}${params.path}`);
+
+    if (params.searchParams) {
+        params.searchParams.forEach((value, key) => {
+            url.searchParams.set(key, value);
+        });
+    }
+
+    const urlString = url.toString();
+    const startedAt = Date.now();
+
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                accept: "text/html,application/xhtml+xml,*/*",
+                "user-agent": "Mozilla/5.0 (compatible; TischtennisTracker/1.0)"
+            }
+        });
+
+        void writeJsonLog("mytt_upstream_request", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "GET",
+            myttPath: params.path,
+            myttUrl: urlString,
+            status: response.status,
+            ok: response.ok,
+            durationMs: Date.now() - startedAt,
+            localRateLimitCounted: countTowardsLocalRateLimit
+        });
+
+        if (response.status === 429) {
+            throw new UpstreamRateLimitError();
+        }
+
+        if (!response.ok) {
+            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+        }
+
+        return response.text();
+    } catch (error) {
+        void writeJsonLog("mytt_upstream_error", {
+            requestId: context?.requestId,
+            clientIp: context?.ip,
+            backendMethod: context?.method,
+            backendUrl: context?.url,
+            myttMethod: "GET",
+            myttPath: params.path,
+            myttUrl: urlString,
+            durationMs: Date.now() - startedAt,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: error instanceof Error ? error.message : "Unknown error"
+        });
+
+        throw error;
+    }
+}
+
+type PromotionState = "promotion" | "relegation" | "none";
+
+function extractPromotionStatesFromTableHtml(html: string): PromotionState[] {
+    const rows = html.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? [];
+
+    return rows
+        .filter((row) => {
+            const text = row
+                .replace(/<[^>]+>/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+
+            // Header-Zeilen rausfiltern
+            return text.length > 0 && !/^rang\s+mannschaft/i.test(text);
+        })
+        .map((row): PromotionState => {
+            if (/#rise(?:["'#\s>]|$)/i.test(row)) {
+                return "promotion";
+            }
+
+            if (/#fall(?:["'#\s>]|$)/i.test(row)) {
+                return "relegation";
+            }
+
+            return "none";
+        });
+}
+
 export async function searchPlayers(params: {
     query: string;
     page?: number;
@@ -383,16 +503,84 @@ export async function getClubTeams(params: {
     });
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+    }
+
+    return value as Record<string, unknown>;
+}
+
+function normalizeFrontendLeagueTableResponse(value: unknown): LeagueTableResponse {
+    const root = asRecord(value);
+    const data = asRecord(root.data);
+
+    const rows =
+        Array.isArray(root.data)
+            ? root.data
+            : Array.isArray(data.league_table)
+                ? data.league_table
+                : Array.isArray(root.league_table)
+                    ? root.league_table
+                    : [];
+
+    return LeagueTableResponseSchema.parse({
+        data: rows,
+        error: root.error ?? data.error ?? null
+    });
+}
+
 export async function getLeagueTable(params: {
     association: string;
+    season: string;
     groupId: string;
+    leagueSlug?: string;
+    filter?: "gesamt" | "vr" | "rr";
 }): Promise<LeagueTableResponse> {
-    return getJsonFromMytt({
-        path: `/api/league-table/${encodeURIComponent(
-            params.association
-        )}/${encodeURIComponent(params.groupId)}`,
-        schema: LeagueTableResponseSchema
+    const filter = params.filter ?? "gesamt";
+    const leagueSlug = toLeagueSlug(params.leagueSlug);
+
+    const path = `/click-tt/${encodeURIComponent(
+        params.association
+    )}/${encodeURIComponent(params.season)}/ligen/${encodeURIComponent(
+        leagueSlug
+    )}/gruppe/${encodeURIComponent(params.groupId)}/tabelle/${encodeURIComponent(
+        filter
+    )}`;
+
+    const searchParams = new URLSearchParams({
+        _data:
+            "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/tabelle.$filter"
     });
+
+    const jsonResult = await getJsonFromMytt({
+        path,
+        searchParams,
+        schema: {
+            parse: normalizeFrontendLeagueTableResponse
+        }
+    });
+
+    let promotionStates: PromotionState[] = [];
+
+    try {
+        const html = await getTextFromMytt({
+            path,
+            countTowardsLocalRateLimit: true
+        });
+
+        promotionStates = extractPromotionStatesFromTableHtml(html);
+    } catch {
+        promotionStates = [];
+    }
+
+    return {
+        ...jsonResult,
+        data: jsonResult.data.map((row, index) => ({
+            ...row,
+            promotion_state: promotionStates[index] ?? "none"
+        }))
+    };
 }
 
 function toLeagueSlug(value: string | undefined): string {
