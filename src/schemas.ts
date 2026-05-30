@@ -111,6 +111,12 @@ export const ClubPlayersResponseSchema = z
         access_level: z.string().nullable().optional(),
         source_path: z.string().nullable().optional(),
         page_url: z.string().nullable().optional(),
+        resolved_club_nr: z.string().nullable().optional(),
+        requested_club_nr: z.string().nullable().optional(),
+        resolution_source: z
+            .enum(["explicit", "cache", "manual_override", "direct", "dynamic_search", "unresolved"])
+            .nullable()
+            .optional(),
         error: z.unknown().nullable().optional()
     })
     .passthrough();
@@ -565,6 +571,9 @@ export type ClubSearchResponse = z.infer<typeof ClubSearchResponseSchema>;
 export type ClubTeam = z.infer<typeof ClubTeamSchema>;
 export type ClubTeamsResponse = z.infer<typeof ClubTeamsResponseSchema>;
 
+export type ClubPlayer = z.infer<typeof ClubPlayerSchema>;
+export type ClubPlayersResponse = z.infer<typeof ClubPlayersResponseSchema>;
+
 export type PlayerTtrResponse = z.infer<typeof PlayerTtrResponseSchema>;
 export type PlayerTtrHistoryResponse = z.infer<typeof PlayerTtrHistoryResponseSchema>;
 export type PlayerTtrEvent = z.infer<typeof PlayerTtrEventSchema>;
@@ -579,9 +588,6 @@ export type TeamInfoResponse = z.infer<typeof TeamInfoResponseSchema>;
 export type TeamScheduleResponse = z.infer<typeof TeamScheduleResponseSchema>;
 export type TeamBalancesResponse = z.infer<typeof TeamBalancesResponseSchema>;
 export type TeamBalancePlayer = z.infer<typeof TeamBalancePlayerSchema>;
-
-export type ClubPlayer = z.infer<typeof ClubPlayerSchema>;
-export type ClubPlayersResponse = z.infer<typeof ClubPlayersResponseSchema>;
 
 export type ApiResponse<T> = {
     data: T;

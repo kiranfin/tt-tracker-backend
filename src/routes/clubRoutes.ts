@@ -98,12 +98,18 @@ export async function clubRoutes(app: FastifyInstance) {
         const query = request.query as {
             androClubNr?: string;
             andro_club_nr?: string;
+            clubName?: string;
+            club_name?: string;
         };
 
         const organization = params.organization?.trim().toUpperCase() ?? "";
         const clubNumber = params.clubNumber?.trim() ?? "";
+
         const androClubNr =
             query.androClubNr?.trim() || query.andro_club_nr?.trim() || undefined;
+
+        const clubName =
+            query.clubName?.trim() || query.club_name?.trim() || undefined;
 
         if (!organization || !clubNumber) {
             return reply.code(400).send({
@@ -118,7 +124,8 @@ export async function clubRoutes(app: FastifyInstance) {
             "club-players-andro",
             organization,
             clubNumber,
-            androClubNr ?? ""
+            androClubNr ?? "",
+            clubName ?? ""
         ].join(":");
 
         const cached = getFromCache<ClubPlayersResponse>(cacheKey);
@@ -136,7 +143,8 @@ export async function clubRoutes(app: FastifyInstance) {
             const result = await getClubPlayersFromAndroRanking({
                 organization,
                 clubNumber,
-                androClubNr
+                androClubNr,
+                clubName
             });
 
             setCache(cacheKey, result, CLUB_PLAYERS_CACHE_TTL);
