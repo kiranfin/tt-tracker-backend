@@ -162,13 +162,25 @@ async function postFormToMytt<T>(params: {
         parse: (value: unknown) => T;
     };
     authenticated?: boolean;
+    requestingUserId?: string;
+    requiredScope?: MyttScope;
     countTowardsLocalRateLimit?: boolean;
+    extraHeaders?: Record<string, string>;
 }): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
     }
 
     const context = getRequestContext();
+
+    let resolvedSession: ResolvedMyttSession | null = null;
+
+    if (params.authenticated) {
+        resolvedSession = await resolveMyttSessionForRequest({
+            requesterUserId: params.requestingUserId ?? context?.appUserId ?? "",
+            requiredScope: params.requiredScope ?? "ttr:read"
+        });
+    }
 
     const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
 
@@ -198,8 +210,10 @@ async function postFormToMytt<T>(params: {
             method: "POST",
             headers: getMyttHeaders({
                 authenticated: params.authenticated,
+                sessionCookie: resolvedSession?.cookie,
                 extraHeaders: {
-                    "content-type": "application/x-www-form-urlencoded"
+                    "content-type": "application/x-www-form-urlencoded",
+                    ...params.extraHeaders
                 }
             }),
             body: params.body
@@ -215,8 +229,26 @@ async function postFormToMytt<T>(params: {
             status: response.status,
             ok: response.ok,
             durationMs: Date.now() - startedAt,
-            localRateLimitCounted: countTowardsLocalRateLimit
+            localRateLimitCounted: countTowardsLocalRateLimit,
+            requesterUserId: resolvedSession?.requesterUserId,
+            sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
+            sessionMode: resolvedSession?.mode
         });
+
+        const bodyText = await response.text();
+
+        if (
+            params.authenticated &&
+            resolvedSession &&
+            responseLooksLikeAuthExpired(response, bodyText)
+        ) {
+            await markMyttSessionExpired(resolvedSession.sessionOwnerUserId);
+
+            throw new MyttSessionExpiredError({
+                sessionOwnerUserId: resolvedSession.sessionOwnerUserId,
+                delegated: resolvedSession.mode === "delegated"
+            });
+        }
 
         if (response.status === 429) {
             throw new UpstreamRateLimitError();
@@ -226,7 +258,15 @@ async function postFormToMytt<T>(params: {
             throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
         }
 
-        const json = await response.json();
+        let json: unknown;
+
+        try {
+            json = JSON.parse(bodyText);
+        } catch {
+            throw new UpstreamError(
+                `Upstream returned non-JSON response for ${params.path}`
+            );
+        }
 
         return params.schema.parse(json);
     } catch (error) {
@@ -1219,6 +1259,20 @@ export async function getMeetingLive(params: {
     });
 }
 
+export type PlayerHeadToHeadResponse = {
+    data: unknown[];
+    error: unknown | null;
+};
+
+function normalizePlayerHeadToHeadResponse(value: unknown): PlayerHeadToHeadResponse {
+    const root = asRecord(value);
+
+    return {
+        data: Array.isArray(root.data) ? root.data : [],
+        error: root.error ?? null
+    };
+}
+
 export async function getPlayerTtr(params: {
     requestingUserId: string;
     nuid: string;
@@ -1243,6 +1297,27 @@ export async function getPlayerTtrHistory(params: {
         authenticated: true,
         requestingUserId: params.requestingUserId,
         requiredScope: "ttr_history:read",
+        countTowardsLocalRateLimit: false
+    });
+}
+
+export async function getPlayerHeadToHead(params: {
+    requestingUserId: string;
+    otherUser: string;
+}): Promise<PlayerHeadToHeadResponse> {
+    const body = new URLSearchParams({
+        other_user: params.otherUser
+    });
+
+    return postFormToMytt({
+        path: "/api/head-to-head",
+        body,
+        schema: {
+            parse: normalizePlayerHeadToHeadResponse
+        },
+        authenticated: true,
+        requestingUserId: params.requestingUserId,
+        requiredScope: "ttr:read",
         countTowardsLocalRateLimit: false
     });
 }
