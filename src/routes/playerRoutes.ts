@@ -523,6 +523,41 @@ function parseScoreLikeResult(value: string | null) {
     return { left, right };
 }
 
+function getOwnOtherScoreFromHeadToHeadItem(item: unknown) {
+    const record = asRecord(item);
+
+    const setPoints = asRecord(record.set_points);
+    const ownSetPoints = asNullableNumber(setPoints.own);
+    const otherSetPoints = asNullableNumber(setPoints.other);
+
+    if (ownSetPoints !== null && otherSetPoints !== null) {
+        return {
+            left: ownSetPoints,
+            right: otherSetPoints
+        };
+    }
+
+    const points = asRecord(record.points);
+    const ownPoints = asNullableNumber(points.own);
+    const otherPoints = asNullableNumber(points.other);
+
+    if (ownPoints !== null && otherPoints !== null) {
+        return {
+            left: ownPoints,
+            right: otherPoints
+        };
+    }
+
+    const resultText = firstString(record, [
+        "result",
+        "ergebnis",
+        "score",
+        "match_result"
+    ]);
+
+    return parseScoreLikeResult(resultText);
+}
+
 function buildHeadToHeadStats(items: unknown[]) {
     let parsed = 0;
     let leftWins = 0;
@@ -530,17 +565,7 @@ function buildHeadToHeadStats(items: unknown[]) {
     let draws = 0;
 
     for (const item of items) {
-        const record = asRecord(item);
-
-        const resultText = firstString(record, [
-            "result",
-            "ergebnis",
-            "score",
-            "sets",
-            "match_result"
-        ]);
-
-        const score = parseScoreLikeResult(resultText);
+        const score = getOwnOtherScoreFromHeadToHeadItem(item);
 
         if (!score) {
             continue;
