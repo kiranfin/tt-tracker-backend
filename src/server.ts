@@ -8,6 +8,7 @@ import { leagueRoutes } from "./routes/leagueRoutes.js";
 import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { playerRoutes } from "./routes/playerRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
+import { eventRoutes } from "./routes/eventRoutes.js";
 import { getRateLimitStatus } from "./rateLimiter.js";
 import { getUpstreamUsage } from "./upstreamTracker.js";
 import { requestContext } from "./requestContext.js";
@@ -140,6 +141,7 @@ await app.register(leagueRoutes);
 await app.register(meetingRoutes);
 await app.register(myttSessionRoutes);
 await app.register(teamRoutes);
+await app.register(eventRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 
