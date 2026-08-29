@@ -589,6 +589,40 @@ export type TeamScheduleResponse = z.infer<typeof TeamScheduleResponseSchema>;
 export type TeamBalancesResponse = z.infer<typeof TeamBalancesResponseSchema>;
 export type TeamBalancePlayer = z.infer<typeof TeamBalancePlayerSchema>;
 
+// --- Dancing Park events (scraped from dancing-park.de) ---
+
+export const EventSummarySchema = z.object({
+    id: z.string(), // GUID from /event/?id=...
+    title: z.string(),
+    date: z.string(), // "YYYY-MM-DD"
+    startTime: z.string().nullable(), // "21:30"
+    endTime: z.string().nullable(), // "05:00"
+    endsNextDay: z.boolean(), // "(+1)" marker in the source
+    weekday: z.string().nullable(), // "Samstag"
+    rawDateText: z.string(), // original text, kept for debugging/fallback
+    imageUrl: z.string().nullable(),
+    detailUrl: z.string(),
+    reservationUrl: z.string().nullable(),
+    u18Url: z.string().nullable()
+});
+
+export const EventListResponseSchema = z.array(EventSummarySchema);
+
+export const EventPriceSchema = z.object({
+    label: z.string(),
+    value: z.string()
+});
+
+export const EventDetailSchema = EventSummarySchema.extend({
+    description: z.string().nullable(),
+    prices: z.array(EventPriceSchema).default([])
+});
+
+export type EventSummary = z.infer<typeof EventSummarySchema>;
+export type EventListResponse = z.infer<typeof EventListResponseSchema>;
+export type EventPrice = z.infer<typeof EventPriceSchema>;
+export type EventDetail = z.infer<typeof EventDetailSchema>;
+
 export type ApiResponse<T> = {
     data: T;
     meta: {
