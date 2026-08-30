@@ -90,10 +90,36 @@ export async function sendPasswordResetEmail(
         "",
         link,
         "",
-        "Der Link ist 1 Stunde gültig und kann nur einmal verwendet werden.",
+        "Falls sich der Link nicht öffnen lässt (z.B. weil du die E-Mail nicht",
+        "auf dem Handy hast), gib diesen Code in der App unter \"Ich habe schon",
+        "einen Code/Link\" ein:",
+        "",
+        rawToken,
+        "",
+        "Der Link/Code ist 1 Stunde gültig und kann nur einmal verwendet werden.",
         "Wenn du das nicht warst, kannst du diese E-Mail ignorieren.",
         "",
-        "Dein TT-Tracker"
+        "Dein TT-Tracker",
+        "",
+        "-----------------------------------------",
+        "",
+        "Hi,",
+        "",
+        "you requested to reset your TT-Tracker password.",
+        "Open the following link to set a new password:",
+        "",
+        link,
+        "",
+        "If the link doesn't open (e.g. because you don't have this email on",
+        "your phone), enter this code in the app under \"I already have a",
+        "code/link\":",
+        "",
+        rawToken,
+        "",
+        "The link/code is valid for 1 hour and can only be used once.",
+        "If this wasn't you, you can ignore this email.",
+        "",
+        "Your TT-Tracker"
     ].join("\n");
 
     const html = [
@@ -101,14 +127,30 @@ export async function sendPasswordResetEmail(
         "<p>du hast das Zurücksetzen deines TT-Tracker-Passworts angefordert.",
         " Klicke auf den folgenden Link, um ein neues Passwort zu setzen:</p>",
         `<p><a href="${link}">Passwort zurücksetzen</a></p>`,
-        "<p>Der Link ist 1 Stunde gültig und kann nur einmal verwendet werden.",
+        "<p>Falls sich der Link nicht öffnen lässt (z.B. weil du die E-Mail nicht",
+        " auf dem Handy hast), gib diesen Code in der App unter",
+        " &quot;Ich habe schon einen Code/Link&quot; ein:</p>",
+        `<p style="font-family:monospace;font-size:15px;word-break:break-all">${rawToken}</p>`,
+        "<p>Der Link/Code ist 1 Stunde gültig und kann nur einmal verwendet werden.",
         " Wenn du das nicht warst, kannst du diese E-Mail ignorieren.</p>",
-        "<p>Dein TT-Tracker</p>"
+        "<p>Dein TT-Tracker</p>",
+        "<hr style=\"border:none;border-top:1px solid #ddd;margin:20px 0\" />",
+        "<p>Hi,</p>",
+        "<p>you requested to reset your TT-Tracker password.",
+        " Click the following link to set a new password:</p>",
+        `<p><a href="${link}">Reset password</a></p>`,
+        "<p>If the link doesn't open (e.g. because you don't have this email",
+        " on your phone), enter this code in the app under",
+        " &quot;I already have a code/link&quot;:</p>",
+        `<p style="font-family:monospace;font-size:15px;word-break:break-all">${rawToken}</p>`,
+        "<p>The link/code is valid for 1 hour and can only be used once.",
+        " If this wasn't you, you can ignore this email.</p>",
+        "<p>Your TT-Tracker</p>"
     ].join("");
 
     await sendMail({
         to: toEmail,
-        subject: "TT-Tracker: Passwort zurücksetzen",
+        subject: "TT-Tracker: Passwort zurücksetzen / Reset password",
         html,
         text
     });
