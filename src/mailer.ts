@@ -1,4 +1,4 @@
-const LETTR_API_URL = "https://app.lettr.com/api/emails";
+import nodemailer, { type Transporter } from "nodemailer";
 
 export class MailNotConfiguredError extends Error {
     constructor() {
@@ -7,28 +7,49 @@ export class MailNotConfiguredError extends Error {
     }
 }
 
-// Accepts a plain "noreply@domain.de" or a "Name <noreply@domain.de>" string and
-// splits it into Lettr's separate `from` (email) + `from_name` fields.
-function parseFrom(raw: string): { from: string; fromName?: string } {
-    const match = raw.match(/^\s*(.*?)\s*<(.+?)>\s*$/);
-
-    if (match) {
-        const [, name, email] = match;
-        return { from: email.trim(), fromName: name.trim() || undefined };
-    }
-
-    return { from: raw.trim() };
-}
+let cachedTransporter: Transporter | null = null;
+let cachedFrom: string | null = null;
 
 function getMailConfig() {
-    const apiKey = process.env.LETTR_API_KEY;
-    const fromRaw = process.env.TTTRACKER_MAIL_FROM;
+    const host = process.env.SMTP_HOST;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const from = process.env.TTTRACKER_MAIL_FROM ?? user;
 
-    if (!apiKey || !fromRaw) {
+    if (!host || !user || !pass || !from) {
         throw new MailNotConfiguredError();
     }
 
-    return { apiKey, ...parseFrom(fromRaw) };
+    const port = Number(process.env.SMTP_PORT ?? 587);
+    // Port 465 = implicit TLS. Everything else uses STARTTLS (secure=false),
+    // unless SMTP_SECURE explicitly overrides it.
+    const secure =
+        process.env.SMTP_SECURE !== undefined
+            ? process.env.SMTP_SECURE === "true"
+            : port === 465;
+
+    return { host, port, secure, user, pass, from };
+}
+
+function getTransporter(): { transporter: Transporter; from: string } {
+    if (cachedTransporter && cachedFrom) {
+        return { transporter: cachedTransporter, from: cachedFrom };
+    }
+
+    const config = getMailConfig();
+
+    cachedTransporter = nodemailer.createTransport({
+        host: config.host,
+        port: config.port,
+        secure: config.secure,
+        auth: {
+            user: config.user,
+            pass: config.pass
+        }
+    });
+    cachedFrom = config.from;
+
+    return { transporter: cachedTransporter, from: cachedFrom };
 }
 
 function buildResetLink(rawToken: string) {
@@ -44,30 +65,15 @@ async function sendMail(params: {
     html: string;
     text: string;
 }) {
-    const { apiKey, from, fromName } = getMailConfig();
+    const { transporter, from } = getTransporter();
 
-    const response = await fetch(LETTR_API_URL, {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            from,
-            ...(fromName ? { from_name: fromName } : {}),
-            to: [params.to],
-            subject: params.subject,
-            html: params.html,
-            text: params.text
-        })
+    await transporter.sendMail({
+        from,
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+        text: params.text
     });
-
-    if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-            `Lettr request failed (${response.status}): ${detail}`
-        );
-    }
 }
 
 export async function sendPasswordResetEmail(
