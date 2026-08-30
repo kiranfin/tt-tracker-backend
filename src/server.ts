@@ -15,6 +15,7 @@ import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
 import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
 import { authRoutes } from "./routes/authRoutes.js";
+import { passwordResetRoutes } from "./routes/passwordResetRoutes.js";
 import { attachOptionalAppUser } from "./authRequest.js";
 import { getRequestContext } from "./requestContext.js";
 
@@ -134,6 +135,7 @@ app.get("/debug/status", async () => {
 });
 
 await app.register(authRoutes);
+await app.register(passwordResetRoutes);
 await app.register(searchRoutes);
 await app.register(playerRoutes);
 await app.register(clubRoutes);
