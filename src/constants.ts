@@ -10,5 +10,8 @@ export const CACHE_TTL = {
 
     MEETING_LIVE: 30 * 1000,
     MEETING_PLANNED: 2 * 60 * 1000,
-    MEETING_COMPLETED: 6 * 60 * 60 * 1000
+    MEETING_COMPLETED: 6 * 60 * 60 * 1000,
+
+    EVENTS_LIST: 30 * 60 * 1000,
+    EVENTS_DETAIL: 60 * 60 * 1000
 } as const;
