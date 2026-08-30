@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 type StoredUser = {
     id: string;
     username: string;
+    email?: string;
+    emailNormalized?: string;
     passwordHash: string;
     salt: string;
     createdAt: string;
@@ -18,12 +20,27 @@ type UserStoreFile = {
 export type PublicAppUser = {
     id: string;
     username: string;
+    email?: string;
 };
 
 export class UsernameAlreadyExistsError extends Error {
     constructor() {
         super("Username already exists");
         this.name = "UsernameAlreadyExistsError";
+    }
+}
+
+export class EmailAlreadyExistsError extends Error {
+    constructor() {
+        super("Email already exists");
+        this.name = "EmailAlreadyExistsError";
+    }
+}
+
+export class UserNotFoundError extends Error {
+    constructor() {
+        super("User not found");
+        this.name = "UserNotFoundError";
     }
 }
 
@@ -67,6 +84,24 @@ function assertValidPassword(password: string) {
     if (password.length < 8) {
         throw new Error("Passwort muss mindestens 8 Zeichen haben.");
     }
+}
+
+function normalizeEmail(email: string) {
+    return email.trim().toLowerCase();
+}
+
+function isValidEmail(email: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function assertValidEmail(email: string) {
+    const normalized = normalizeEmail(email);
+
+    if (!isValidEmail(normalized)) {
+        throw new Error("Ungültige E-Mail-Adresse.");
+    }
+
+    return normalized;
 }
 
 async function readStore(): Promise<UserStoreFile> {
@@ -114,16 +149,21 @@ function safeEqualHex(a: string, b: string) {
 function toPublicUser(user: StoredUser): PublicAppUser {
     return {
         id: user.id,
-        username: user.username
+        username: user.username,
+        ...(user.email ? { email: user.email } : {})
     };
 }
 
 export async function createAppUser(params: {
     username: string;
     password: string;
+    email?: string;
 }): Promise<PublicAppUser> {
     const username = assertValidUsername(params.username);
     assertValidPassword(params.password);
+
+    const email =
+        params.email !== undefined ? assertValidEmail(params.email) : undefined;
 
     const store = await readStore();
 
@@ -135,6 +175,15 @@ export async function createAppUser(params: {
         throw new UsernameAlreadyExistsError();
     }
 
+    if (
+        email &&
+        Object.values(store.users).some(
+            (user) => user.emailNormalized === email
+        )
+    ) {
+        throw new EmailAlreadyExistsError();
+    }
+
     const id = crypto.randomUUID();
     const salt = crypto.randomBytes(16).toString("hex");
     const now = nowIso();
@@ -142,6 +191,7 @@ export async function createAppUser(params: {
     const user: StoredUser = {
         id,
         username,
+        ...(email ? { email, emailNormalized: email } : {}),
         salt,
         passwordHash: hashPassword(params.password, salt),
         createdAt: now,
@@ -199,4 +249,71 @@ export async function findAppUserByUsername(
     );
 
     return user ? toPublicUser(user) : null;
+}
+
+export async function findAppUserByEmail(
+    emailInput: string
+): Promise<PublicAppUser | null> {
+    const email = normalizeEmail(emailInput);
+    const store = await readStore();
+
+    const user = Object.values(store.users).find(
+        (candidate) => candidate.emailNormalized === email
+    );
+
+    return user ? toPublicUser(user) : null;
+}
+
+export async function setAppUserEmail(
+    userId: string,
+    emailInput: string
+): Promise<PublicAppUser> {
+    const email = assertValidEmail(emailInput);
+    const store = await readStore();
+
+    const user = store.users[userId];
+
+    if (!user) {
+        throw new UserNotFoundError();
+    }
+
+    const takenByOther = Object.values(store.users).some(
+        (candidate) =>
+            candidate.id !== userId && candidate.emailNormalized === email
+    );
+
+    if (takenByOther) {
+        throw new EmailAlreadyExistsError();
+    }
+
+    user.email = email;
+    user.emailNormalized = email;
+    user.updatedAt = nowIso();
+
+    await writeStore(store);
+
+    return toPublicUser(user);
+}
+
+export async function setAppUserPassword(
+    userId: string,
+    newPassword: string
+): Promise<PublicAppUser> {
+    assertValidPassword(newPassword);
+
+    const store = await readStore();
+
+    const user = store.users[userId];
+
+    if (!user) {
+        throw new UserNotFoundError();
+    }
+
+    user.salt = crypto.randomBytes(16).toString("hex");
+    user.passwordHash = hashPassword(newPassword, user.salt);
+    user.updatedAt = nowIso();
+
+    await writeStore(store);
+
+    return toPublicUser(user);
 }
