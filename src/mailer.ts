@@ -1,4 +1,4 @@
-const RESEND_API_URL = "https://api.resend.com/emails";
+const LETTR_API_URL = "https://app.lettr.com/api/emails";
 
 export class MailNotConfiguredError extends Error {
     constructor() {
@@ -7,15 +7,28 @@ export class MailNotConfiguredError extends Error {
     }
 }
 
-function getMailConfig() {
-    const apiKey = process.env.RESEND_API_KEY;
-    const from = process.env.TTTRACKER_MAIL_FROM;
+// Accepts a plain "noreply@domain.de" or a "Name <noreply@domain.de>" string and
+// splits it into Lettr's separate `from` (email) + `from_name` fields.
+function parseFrom(raw: string): { from: string; fromName?: string } {
+    const match = raw.match(/^\s*(.*?)\s*<(.+?)>\s*$/);
 
-    if (!apiKey || !from) {
+    if (match) {
+        const [, name, email] = match;
+        return { from: email.trim(), fromName: name.trim() || undefined };
+    }
+
+    return { from: raw.trim() };
+}
+
+function getMailConfig() {
+    const apiKey = process.env.LETTR_API_KEY;
+    const fromRaw = process.env.TTTRACKER_MAIL_FROM;
+
+    if (!apiKey || !fromRaw) {
         throw new MailNotConfiguredError();
     }
 
-    return { apiKey, from };
+    return { apiKey, ...parseFrom(fromRaw) };
 }
 
 function buildResetLink(rawToken: string) {
@@ -31,9 +44,9 @@ async function sendMail(params: {
     html: string;
     text: string;
 }) {
-    const { apiKey, from } = getMailConfig();
+    const { apiKey, from, fromName } = getMailConfig();
 
-    const response = await fetch(RESEND_API_URL, {
+    const response = await fetch(LETTR_API_URL, {
         method: "POST",
         headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -41,7 +54,8 @@ async function sendMail(params: {
         },
         body: JSON.stringify({
             from,
-            to: params.to,
+            ...(fromName ? { from_name: fromName } : {}),
+            to: [params.to],
             subject: params.subject,
             html: params.html,
             text: params.text
@@ -51,7 +65,7 @@ async function sendMail(params: {
     if (!response.ok) {
         const detail = await response.text().catch(() => "");
         throw new Error(
-            `Resend request failed (${response.status}): ${detail}`
+            `Lettr request failed (${response.status}): ${detail}`
         );
     }
 }
