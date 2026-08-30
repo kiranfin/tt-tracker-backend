@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createAccessToken } from "../authToken.js";
 import {
     createAppUser,
+    EmailAlreadyExistsError,
     InvalidCredentialsError,
     UsernameAlreadyExistsError,
     verifyAppUserLogin
@@ -15,14 +16,19 @@ const AuthBodySchema = z.object({
     password: z.string().min(8).max(200)
 });
 
+const RegisterBodySchema = AuthBodySchema.extend({
+    email: z.string().email().optional()
+});
+
 export async function authRoutes(app: FastifyInstance) {
     app.post("/api/auth/register", async (request, reply) => {
         try {
-            const body = AuthBodySchema.parse(request.body);
+            const body = RegisterBodySchema.parse(request.body);
 
             const user = await createAppUser({
                 username: body.username,
-                password: body.password
+                password: body.password,
+                email: body.email
             });
 
             const accessToken = createAccessToken(user);
@@ -39,6 +45,15 @@ export async function authRoutes(app: FastifyInstance) {
                     error: {
                         code: "USERNAME_EXISTS",
                         message: "Dieser Benutzername ist bereits vergeben."
+                    }
+                });
+            }
+
+            if (error instanceof EmailAlreadyExistsError) {
+                return reply.code(409).send({
+                    error: {
+                        code: "EMAIL_EXISTS",
+                        message: "Diese E-Mail-Adresse wird bereits verwendet."
                     }
                 });
             }

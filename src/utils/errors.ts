@@ -12,6 +12,7 @@ import {
     UpstreamRateLimitError
 } from "../myttClient.js";
 import { InvalidTokenError } from "../authToken.js";
+import { UserNotFoundError } from "../authStore.js";
 
 export function handleApiError(error: unknown, reply: FastifyReply) {
     if (error instanceof ZodError) {
@@ -39,6 +40,15 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
                 code: "APP_USER_REQUIRED",
                 message:
                     "Für diese Funktion muss ein App-User angegeben werden."
+            }
+        });
+    }
+
+    if (error instanceof UserNotFoundError) {
+        return reply.code(404).send({
+            error: {
+                code: "USER_NOT_FOUND",
+                message: "Benutzer wurde nicht gefunden."
             }
         });
     }
