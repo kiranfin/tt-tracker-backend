@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache.js";
+import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import { fetchEventsList, fetchEventDetail } from "../dancingParkClient.js";
 import { handleApiError } from "../utils/errors.js";

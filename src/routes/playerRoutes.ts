@@ -4,7 +4,7 @@ import {
     getPlayerHeadToHead,
     getPlayerTtr,
     getPlayerTtrHistory
-} from "../myttClient.js";
+} from "../mytt/index.js";
 import { handleApiError } from "../utils/errors.js";
 
 function normalizeNuid(nuid: string) {

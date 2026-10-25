@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache.js";
+import { readThrough } from "../cache/index.js";
 import {
     getTeamBalances,
     getTeamInfos,
     getTeamPlayers,
     getTeamSchedule,
     getTeamSimpleSchedule
-} from "../myttClient.js";
+} from "../mytt/index.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -83,8 +83,7 @@ export async function teamRoutes(app: FastifyInstance) {
             const result = await readThrough({
                 key: `team-players:${teamId}`,
                 ttlMs: TEAM_CACHE_TTL.PLAYERS,
-                load: () =>
-                    getTeamPlayers({ teamId })
+                load: () => getTeamPlayers({ teamId })
             });
 
             return {
@@ -120,8 +119,7 @@ export async function teamRoutes(app: FastifyInstance) {
             const result = await readThrough({
                 key: `team-simple-schedule:${teamId}:${season}`,
                 ttlMs: TEAM_CACHE_TTL.SIMPLE_SCHEDULE,
-                load: () =>
-                    getTeamSimpleSchedule({ teamId, season })
+                load: () => getTeamSimpleSchedule({ teamId, season })
             });
 
             return {

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache.js";
+import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
-import { getMeetingLive } from "../myttClient.js";
+import { getMeetingLive } from "../mytt/index.js";
 import type { MeetingLiveResponse } from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";

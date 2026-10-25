@@ -34,7 +34,7 @@ export function trackUpstreamRequest(entry: Omit<UpstreamRequestEntry, "timestam
     });
 }
 
-type SourceKind = "api" | "html";
+export type SourceKind = "api" | "html";
 
 type SourceCounter = {
     ok: number;

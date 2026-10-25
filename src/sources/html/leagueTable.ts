@@ -4,6 +4,15 @@ import { RemixContextParseError } from "./remixContext.js";
 
 export type PromotionState = "promotion" | "relegation" | "none";
 
+// Auf- und Abstiegsplätze sind in der Seite nur als Symbol (#rise / #fall) markiert.
+function promotionStateOfRow(rowHtml: string): PromotionState {
+    if (/#rise(?:["'#\s>]|$)/i.test(rowHtml)) {
+        return "promotion";
+    }
+
+    return /#fall(?:["'#\s>]|$)/i.test(rowHtml) ? "relegation" : "none";
+}
+
 export function extractPromotionStatesFromTableHtml(html: string): PromotionState[] {
     const rows = html.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? [];
 
@@ -16,17 +25,7 @@ export function extractPromotionStatesFromTableHtml(html: string): PromotionStat
 
             return text.length > 0 && !/^rang\s+mannschaft/i.test(text);
         })
-        .map((row): PromotionState => {
-            if (/#rise(?:["'#\s>]|$)/i.test(row)) {
-                return "promotion";
-            }
-
-            if (/#fall(?:["'#\s>]|$)/i.test(row)) {
-                return "relegation";
-            }
-
-            return "none";
-        });
+        .map(promotionStateOfRow);
 }
 
 function toInt(value: string | undefined): number | null {
@@ -77,7 +76,6 @@ export function parseLeagueTableFromHtmlTable(html: string): LeagueTableResponse
 
         const [matchesWon, matchesLost] = parseRelation(text(6));
         const [pointsWon, pointsLost] = parseRelation(text(8));
-        const rowHtml = $.html(element);
 
         rows.push({
             team_id: teamId,
@@ -92,11 +90,7 @@ export function parseLeagueTableFromHtmlTable(html: string): LeagueTableResponse
             matches_relation: text(6),
             points_won: pointsWon,
             points_lost: pointsLost,
-            promotion_state: /#rise(?:["'#\s>]|$)/i.test(rowHtml)
-                ? "promotion"
-                : /#fall(?:["'#\s>]|$)/i.test(rowHtml)
-                    ? "relegation"
-                    : "none"
+            promotion_state: promotionStateOfRow($.html(element))
         });
     });
 

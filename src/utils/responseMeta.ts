@@ -1,4 +1,4 @@
-import type { ReadThroughResult } from "../cache.js";
+import type { ReadThroughResult } from "../cache/index.js";
 
 export function buildMeta(
     result: Pick<ReadThroughResult<unknown>, "source" | "fetchedAt">,

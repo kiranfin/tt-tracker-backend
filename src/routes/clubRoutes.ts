@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache.js";
+import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import {
     getClubPlayersFromAndroRanking,
     getClubSchedule,
     getClubTeams
-} from "../myttClient.js";
+} from "../mytt/index.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 

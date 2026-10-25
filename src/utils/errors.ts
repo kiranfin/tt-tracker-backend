@@ -1,16 +1,16 @@
 import type { FastifyReply } from "fastify";
 import { ZodError } from "zod";
 import { AppUserRequiredError, InvalidAppUserError } from "../appUser.js";
-import { LocalRateLimitError } from "../rateLimiter.js";
 import {
     MyttAccountRequiredError,
     MyttSessionExpiredError
 } from "../myttSessionStore.js";
 import {
+    LocalRateLimitError,
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError
-} from "../upstreamErrors.js";
+} from "../upstream/errors.js";
 import { InvalidTokenError } from "../authToken.js";
 import { UserNotFoundError } from "../authStore.js";
 

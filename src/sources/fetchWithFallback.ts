@@ -1,13 +1,11 @@
 import { ZodError } from "zod";
-import { markLoadOrigin } from "../cache.js";
+import { config } from "../config.js";
+import { markLoadOrigin } from "../cache/index.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
-import { htmlFallbackEnabled, isApiFailureForced } from "../upstreamConfig.js";
-import { UpstreamError, UpstreamRateLimitError } from "../upstreamErrors.js";
-import { trackSourceResult } from "../upstreamTracker.js";
+import { UpstreamError, UpstreamRateLimitError } from "../upstream/errors.js";
+import { trackSourceResult, type SourceKind } from "../upstream/tracker.js";
 import { RemixContextParseError } from "./html/remixContext.js";
-
-type SourceKind = "api" | "html";
 
 // Nur Fehler, bei denen genau dieser Pfad kaputt ist. Session Fehler, abgeschaltetes Upstream
 // und lokale Limits (Breaker, Stundenlimit) gehen unverändert durch: dieselbe Quelle gäbe dasselbe Ergebnis.
@@ -46,7 +44,7 @@ async function runStep<T>(
     run: () => Promise<T>
 ): Promise<T> {
     try {
-        if (source === "api" && isApiFailureForced()) {
+        if (source === "api" && config.upstream.forceApiFailure) {
             throw new UpstreamError("API failure forced by MYTT_FORCE_API_FAILURE");
         }
 
@@ -86,7 +84,7 @@ export async function fetchWithFallback<T>(params: {
             throw primaryError;
         }
 
-        if (fallbackSource === "html" && !htmlFallbackEnabled) {
+        if (fallbackSource === "html" && !config.upstream.htmlFallbackEnabled) {
             throw primaryError;
         }
 

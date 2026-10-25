@@ -14,7 +14,7 @@ import { writeJsonLog } from "./fileLogger.js";
 import {
     UpstreamDisabledError,
     UpstreamError
-} from "./myttClient.js";
+} from "./upstream/errors.js";
 
 const DANCINGPARK_BASE_URL =
     process.env.DANCINGPARK_BASE_URL ?? "https://www.dancing-park.de";
