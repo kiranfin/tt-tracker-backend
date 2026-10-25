@@ -147,13 +147,17 @@ await app.register(eventRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 
+// Auf dem Server bleibt das Backend hinter dem Reverse Proxy (127.0.0.1).
+// Lokal HOST=0.0.0.0 setzen, damit das Handy im WLAN das Backend erreicht.
+const host = process.env.HOST?.trim() || "127.0.0.1";
+
 try {
     await app.listen({
         port,
-        host: "127.0.0.1"
+        host
     });
 
-    app.log.info(`Server läuft auf http://127.0.0.1:${port}`);
+    app.log.info(`Server läuft auf http://${host}:${port}`);
 } catch (error) {
     app.log.error(error);
     process.exit(1);

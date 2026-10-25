@@ -88,6 +88,16 @@ npm run build
 npm run start
 ```
 
+### Local Development
+
+For testing the app on a phone against your PC, set `HOST=0.0.0.0` in `.env` so the backend is reachable in your Wi-Fi, then run:
+
+```bash
+npm run dev
+```
+
+This restarts automatically on file changes. On the server keep the default `HOST=127.0.0.1` behind the reverse proxy.
+
 ---
 
 ## Updating the Backend 🔄
