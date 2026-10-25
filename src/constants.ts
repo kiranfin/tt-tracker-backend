@@ -8,6 +8,9 @@ export const CACHE_TTL = {
     LEAGUE_TABLE: 15 * 60 * 1000,
     LEAGUE_SCHEDULE: 60 * 60 * 1000,
 
+    // Leere Tabellen und Spielpläne (Saison noch nicht begonnen oder Format verschoben) schnell neu prüfen.
+    EMPTY_RESULT: 2 * 60 * 1000,
+
     MEETING_LIVE: 30 * 1000,
     MEETING_PLANNED: 2 * 60 * 1000,
     MEETING_COMPLETED: 6 * 60 * 60 * 1000,

@@ -149,6 +149,14 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         return { response, bodyText };
     } catch (error) {
         if (response) {
+            // Header kamen an, der Body nicht rechtzeitig: gleiche Behandlung wie ein Timeout vor der Antwort.
+            // Alles andere (z.B. "too large") ist schon ein UpstreamError und bleibt unverändert.
+            if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+                reportUpstreamResult({ networkError: true });
+
+                throw toUpstreamError(error, request.timeoutMs);
+            }
+
             throw error;
         }
 

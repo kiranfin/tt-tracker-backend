@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { LeagueTableResponseSchema, type LeagueTableResponse } from "../../schemas.js";
+import { parseUpstream } from "../../upstream/parse.js";
 import { RemixContextParseError } from "./remixContext.js";
 
 export type PromotionState = "promotion" | "relegation" | "none";
@@ -13,19 +14,21 @@ function promotionStateOfRow(rowHtml: string): PromotionState {
     return /#fall(?:["'#\s>]|$)/i.test(rowHtml) ? "relegation" : "none";
 }
 
-export function extractPromotionStatesFromTableHtml(html: string): PromotionState[] {
-    const rows = html.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? [];
+/**
+ * Auf/Abstieg einer Tabellenzeile aus den Loader Daten bzw. der API.
+ * `rise_fall_state` ist die genauere Angabe, `tendency` der Ersatz.
+ */
+export function promotionStateOfApiRow(row: {
+    rise_fall_state?: string | null;
+    tendency?: string | null;
+}): PromotionState {
+    const state = row.rise_fall_state ?? row.tendency;
 
-    return rows
-        .filter((row) => {
-            const text = row
-                .replace(/<[^>]+>/g, " ")
-                .replace(/\s+/g, " ")
-                .trim();
+    if (state === "rise") {
+        return "promotion";
+    }
 
-            return text.length > 0 && !/^rang\s+mannschaft/i.test(text);
-        })
-        .map(promotionStateOfRow);
+    return state === "fall" ? "relegation" : "none";
 }
 
 function toInt(value: string | undefined): number | null {
@@ -34,25 +37,63 @@ function toInt(value: string | undefined): number | null {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseRelation(value: string): [number | null, number | null] {
-    const [left, right] = value.split(":");
+function parseRelation(value: string | undefined): [number | null, number | null] {
+    const [left, right] = (value ?? "").split(":");
 
     return [toInt(left), toInt(right)];
 }
 
+type ColumnKey = "rank" | "team" | "meetings" | "won" | "tie" | "lost" | "matches" | "relation" | "points";
+
+const COLUMN_PATTERNS: Array<[ColumnKey, RegExp]> = [
+    ["rank", /^rang\b/],
+    ["team", /^mannschaft\b/],
+    ["meetings", /^beg/],
+    ["won", /^s$/],
+    ["tie", /^u$/],
+    ["lost", /^n$/],
+    ["matches", /^spiele\b/],
+    ["relation", /^\+\/-$/],
+    ["points", /^punkte\b/]
+];
+
+function columnIndexes(headers: string[]): Partial<Record<ColumnKey, number>> {
+    const indexes: Partial<Record<ColumnKey, number>> = {};
+
+    headers.forEach((header, index) => {
+        const match = COLUMN_PATTERNS.find(([key, pattern]) => indexes[key] === undefined && pattern.test(header));
+
+        if (match) {
+            indexes[match[0]] = index;
+        }
+    });
+
+    return indexes;
+}
+
 /**
  * Letzte Stufe, wenn die Seite keine Loader Daten mehr enthält: liest die sichtbare Tabelle.
- * Spalten: Rang, Mannschaft, Beg., S, U, N, Spiele (X:Y), +/-, Punkte (X:Y).
+ * Die Spalten werden über die Kopfzeile gefunden (Rang, Mannschaft, Beg., S, U, N, Spiele X:Y, +/-,
+ * Punkte X:Y), nicht über feste Positionen. Rang, Mannschaft und Punkte müssen vorhanden sein.
  * Liefert nur die Felder, die in der Tabelle stehen.
  */
 export function parseLeagueTableFromHtmlTable(html: string): LeagueTableResponse {
     const $ = cheerio.load(html);
 
+    // Nur die Kopfzeile: thead, sonst die erste Zeile.
+    const headersOf = (element: Parameters<typeof $>[0]) => {
+        const head = $(element).find("thead th");
+
+        return (head.length > 0 ? head : $(element).find("tr").first().find("th"))
+            .map((_, th) => $(th).text().replace(/\s+/g, " ").trim().toLowerCase())
+            .get();
+    };
+
     const table = $("table")
         .filter((_, element) => {
-            const header = $(element).find("thead").text().replace(/\s+/g, " ");
+            const headers = headersOf(element);
 
-            return /Rang/i.test(header) && /Mannschaft/i.test(header);
+            return headers.some((h) => /^rang\b/.test(h)) && headers.some((h) => /^mannschaft\b/.test(h));
         })
         .first();
 
@@ -60,34 +101,45 @@ export function parseLeagueTableFromHtmlTable(html: string): LeagueTableResponse
         throw new RemixContextParseError("League table element was not found in HTML.");
     }
 
+    const columns = columnIndexes(headersOf(table));
+
+    if (columns.rank === undefined || columns.team === undefined || columns.points === undefined) {
+        throw new RemixContextParseError(
+            "League table is missing the columns Rang, Mannschaft or Punkte."
+        );
+    }
+
+    const { rank, team, meetings, won, tie, lost, matches, relation, points } = columns;
+    const requiredCells = Math.max(...Object.values(columns)) + 1;
     const rows: unknown[] = [];
 
-    table.find("tbody tr").each((_, element) => {
+    table.find("tr").each((_, element) => {
         const row = $(element);
-        const cells = row.find("td");
+        const cells = row.children("td");
 
-        if (cells.length < 9) {
+        if (cells.length < requiredCells) {
             return;
         }
 
-        const text = (index: number) => $(cells[index]).text().replace(/\s+/g, " ").trim();
-        const link = $(cells[1]).find("a").first().attr("href") ?? "";
+        const text = (index: number | undefined) =>
+            index === undefined ? undefined : $(cells[index]).text().replace(/\s+/g, " ").trim();
+        const link = $(cells[team]).find("a").first().attr("href") ?? "";
         const teamId = /\/mannschaft\/(\d+)\//.exec(link)?.[1] ?? null;
 
-        const [matchesWon, matchesLost] = parseRelation(text(6));
-        const [pointsWon, pointsLost] = parseRelation(text(8));
+        const [matchesWon, matchesLost] = parseRelation(text(matches));
+        const [pointsWon, pointsLost] = parseRelation(text(points));
 
         rows.push({
             team_id: teamId,
-            team_name: text(1),
-            table_rank: toInt(text(0)),
-            meetings_count: toInt(text(2)),
-            meetings_won: toInt(text(3)),
-            meetings_tie: toInt(text(4)),
-            meetings_lost: toInt(text(5)),
+            team_name: text(team),
+            table_rank: toInt(text(rank)),
+            meetings_count: toInt(text(meetings)),
+            meetings_won: toInt(text(won)),
+            meetings_tie: toInt(text(tie)),
+            meetings_lost: toInt(text(lost)),
             matches_won: matchesWon,
             matches_lost: matchesLost,
-            matches_relation: text(6),
+            matches_relation: text(relation) ?? null,
             points_won: pointsWon,
             points_lost: pointsLost,
             promotion_state: promotionStateOfRow($.html(element))
@@ -98,5 +150,5 @@ export function parseLeagueTableFromHtmlTable(html: string): LeagueTableResponse
         throw new RemixContextParseError("League table has no rows.");
     }
 
-    return LeagueTableResponseSchema.parse({ data: rows, error: null });
+    return parseUpstream(LeagueTableResponseSchema, { data: rows, error: null }, "league_table_html");
 }

@@ -6,6 +6,7 @@ import {
     getClubSchedule,
     getClubTeams
 } from "../mytt/index.js";
+import { isEmptyClubSchedule, ttlUnlessEmpty } from "../sources/validate.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -190,7 +191,7 @@ export async function clubRoutes(app: FastifyInstance) {
         try {
             const result = await readThrough({
                 key: cacheKey,
-                ttlMs: CLUB_SCHEDULE_CACHE_TTL,
+                ttlMs: ttlUnlessEmpty(CLUB_SCHEDULE_CACHE_TTL, isEmptyClubSchedule),
                 load: () =>
                     getClubSchedule({
                         organization,

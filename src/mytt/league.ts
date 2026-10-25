@@ -1,19 +1,20 @@
-import { ZodError } from "zod";
 import { config } from "../config.js";
 import { LeagueScheduleResponseSchema, LeagueTableResponseSchema } from "../schemas.js";
 import type { LeagueScheduleResponse, LeagueTableResponse } from "../schemas.js";
 import { fetchWithFallback } from "../sources/fetchWithFallback.js";
 import { fetchHtmlPage } from "../sources/html/fetchPage.js";
 import {
-    extractPromotionStatesFromTableHtml,
     parseLeagueTableFromHtmlTable,
-    type PromotionState
+    promotionStateOfApiRow
 } from "../sources/html/leagueTable.js";
 import { getRouteDataFromHtml, RemixContextParseError } from "../sources/html/remixContext.js";
+import { validateLeagueSchedule, validateLeagueTable } from "../sources/validate.js";
+import { UpstreamFormatError } from "../upstream/errors.js";
+import { parseUpstream } from "../upstream/parse.js";
 import { getJsonFromMytt, getRouteDataWithHtmlFallback } from "./request.js";
 import { asRecord } from "./values.js";
 
-function normalizeFrontendLeagueTableResponse(value: unknown): LeagueTableResponse {
+export function normalizeFrontendLeagueTableResponse(value: unknown): LeagueTableResponse {
     const root = asRecord(value);
     const data = asRecord(root.data);
 
@@ -26,46 +27,79 @@ function normalizeFrontendLeagueTableResponse(value: unknown): LeagueTableRespon
                     ? root.league_table
                     : [];
 
-    return LeagueTableResponseSchema.parse({
-        data: rows,
-        error: root.error ?? data.error ?? null
-    });
+    return parseUpstream(
+        LeagueTableResponseSchema,
+        {
+            data: rows,
+            error: root.error ?? data.error ?? null
+        },
+        "league_table"
+    );
 }
 
-const LEAGUE_TABLE_ROUTE_ID =
+export const LEAGUE_TABLE_ROUTE_ID =
     "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/tabelle.$filter";
 
-function applyPromotionStates(
-    table: LeagueTableResponse,
-    promotionStates: PromotionState[]
-): LeagueTableResponse {
+export const LEAGUE_SCHEDULE_ROUTE_ID =
+    "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/spielplan.$filter";
+
+export function buildLeaguePagePath(params: {
+    association: string;
+    season: string;
+    groupId: string;
+    leagueSlug?: string;
+    page: "tabelle" | "spielplan";
+    filter?: "gesamt" | "vr" | "rr";
+}) {
+    const segments = [
+        "click-tt",
+        params.association,
+        params.season,
+        "ligen",
+        toLeagueSlug(params.leagueSlug),
+        "gruppe",
+        params.groupId,
+        params.page,
+        params.filter ?? "gesamt"
+    ];
+
+    return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+}
+
+function withPromotionStates(table: LeagueTableResponse): LeagueTableResponse {
     return {
         ...table,
-        data: table.data.map((row, index) => ({
+        data: table.data.map((row) => ({
             ...row,
-            promotion_state: promotionStates[index] ?? "none"
+            promotion_state: promotionStateOfApiRow(row)
         }))
     };
 }
 
-// Ein einziger Seitenabruf liefert Tabelle (Loader Daten) und Auf/Abstiegs Symbole.
+// Primär die Loader Daten der Seite (gleiche Felder wie die API). Nur wenn die fehlen oder nicht
+// mehr passen, die sichtbare Tabelle lesen: dieser Parser ist unabhängig vom Loader Format.
 async function getLeagueTableFromPage(path: string): Promise<LeagueTableResponse> {
     const html = await fetchHtmlPage({ path });
 
     try {
-        const table = normalizeFrontendLeagueTableResponse(
-            getRouteDataFromHtml(html, LEAGUE_TABLE_ROUTE_ID)
+        return validateLeagueTable(
+            withPromotionStates(
+                normalizeFrontendLeagueTableResponse(
+                    getRouteDataFromHtml(html, LEAGUE_TABLE_ROUTE_ID)
+                )
+            ),
+            "league_table:html"
         );
-
-        return applyPromotionStates(table, extractPromotionStatesFromTableHtml(html));
     } catch (error) {
-        if (!(error instanceof RemixContextParseError) && !(error instanceof ZodError)) {
+        if (!(error instanceof RemixContextParseError) && !(error instanceof UpstreamFormatError)) {
             throw error;
         }
 
-        // Keine brauchbaren Loader Daten (z.B. Framework Update): sichtbare Tabelle lesen.
         try {
-            return parseLeagueTableFromHtmlTable(html);
+            return validateLeagueTable(
+                parseLeagueTableFromHtmlTable(html),
+                "league_table:html_table"
+            );
         } catch {
             throw error;
         }
@@ -77,6 +111,7 @@ async function getLeagueTableFromApi(
     searchParams: URLSearchParams
 ): Promise<LeagueTableResponse> {
     const table = await getJsonFromMytt({
+        name: "league_table",
         path,
         searchParams,
         schema: {
@@ -84,17 +119,7 @@ async function getLeagueTableFromApi(
         }
     });
 
-    // Ohne Seite gibt es keine Auf/Abstiegs Symbole, die Tendenz der API entspricht ihnen.
-    return applyPromotionStates(
-        table,
-        table.data.map((row): PromotionState => {
-            if (row.tendency === "rise") {
-                return "promotion";
-            }
-
-            return row.tendency === "fall" ? "relegation" : "none";
-        })
-    );
+    return validateLeagueTable(withPromotionStates(table), "league_table");
 }
 
 export async function getLeagueTable(params: {
@@ -104,16 +129,7 @@ export async function getLeagueTable(params: {
     leagueSlug?: string;
     filter?: "gesamt" | "vr" | "rr";
 }): Promise<LeagueTableResponse> {
-    const filter = params.filter ?? "gesamt";
-    const leagueSlug = toLeagueSlug(params.leagueSlug);
-
-    const path = `/click-tt/${encodeURIComponent(
-        params.association
-    )}/${encodeURIComponent(params.season)}/ligen/${encodeURIComponent(
-        leagueSlug
-    )}/gruppe/${encodeURIComponent(params.groupId)}/tabelle/${encodeURIComponent(
-        filter
-    )}`;
+    const path = buildLeaguePagePath({ ...params, page: "tabelle" });
 
     const searchParams = new URLSearchParams({
         _data: LEAGUE_TABLE_ROUTE_ID
@@ -125,9 +141,10 @@ export async function getLeagueTable(params: {
 
     return fetchWithFallback({
         name: "league_table",
-        primarySource: "html",
-        primary: () => getLeagueTableFromPage(path),
-        fallback: () => getLeagueTableFromApi(path, searchParams)
+        // Die Seite hat einen eigenen Parser (sichtbare Tabelle), der vom Loader Format unabhängig ist.
+        fallbackOnFormatError: true,
+        primary: () => getLeagueTableFromApi(path, searchParams),
+        fallback: () => getLeagueTableFromPage(path)
     });
 }
 
@@ -156,24 +173,13 @@ export async function getLeagueSchedule(params: {
     leagueSlug?: string;
     filter?: "gesamt" | "vr" | "rr";
 }): Promise<LeagueScheduleResponse> {
-    const filter = params.filter ?? "gesamt";
-    const leagueSlug = toLeagueSlug(params.leagueSlug);
-
-    const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/spielplan.$filter"
-    });
+    const searchParams = new URLSearchParams({ _data: LEAGUE_SCHEDULE_ROUTE_ID });
 
     return getRouteDataWithHtmlFallback({
         name: "league_schedule",
-        path: `/click-tt/${encodeURIComponent(
-            params.association
-        )}/${encodeURIComponent(params.season)}/ligen/${encodeURIComponent(
-            leagueSlug
-        )}/gruppe/${encodeURIComponent(params.groupId)}/spielplan/${encodeURIComponent(
-            filter
-        )}`,
+        path: buildLeaguePagePath({ ...params, page: "spielplan" }),
         searchParams,
-        schema: LeagueScheduleResponseSchema
+        schema: LeagueScheduleResponseSchema,
+        validate: validateLeagueSchedule
     });
 }

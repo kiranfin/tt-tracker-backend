@@ -7,6 +7,11 @@ import {
     getTeamSchedule,
     getTeamSimpleSchedule
 } from "../mytt/index.js";
+import {
+    isEmptyTeamBalances,
+    isEmptyTeamSchedule,
+    ttlUnlessEmpty
+} from "../sources/validate.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -218,7 +223,7 @@ export async function teamRoutes(app: FastifyInstance) {
             try {
                 const result = await readThrough({
                     key: `team-schedule:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
-                    ttlMs: TEAM_CACHE_TTL.SCHEDULE,
+                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.SCHEDULE, isEmptyTeamSchedule),
                     load: () =>
                         getTeamSchedule({
                             association,
@@ -274,7 +279,7 @@ export async function teamRoutes(app: FastifyInstance) {
             try {
                 const result = await readThrough({
                     key: `team-balances:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
-                    ttlMs: TEAM_CACHE_TTL.BALANCES,
+                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.BALANCES, isEmptyTeamBalances),
                     load: () =>
                         getTeamBalances({
                             association,

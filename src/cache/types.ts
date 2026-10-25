@@ -16,6 +16,8 @@ export type CacheEntry = {
 export type ReadThroughResult<T> = {
     value: T;
     source: CacheSource;
+    // Woher der Wert ursprünglich geladen wurde, auch bei Cache Treffern und stale Antworten.
+    origin: LoadOrigin;
     fetchedAt: string;
 };
 

@@ -1,5 +1,9 @@
 export class UpstreamError extends Error {
-    constructor(message: string) {
+    constructor(
+        message: string,
+        // HTTP Status, wenn myTischtennis geantwortet hat. Ohne Status: Netzwerk, Timeout, falsches Format.
+        readonly status?: number
+    ) {
         super(message);
         this.name = "UpstreamError";
     }
@@ -9,6 +13,17 @@ export class UpstreamRateLimitError extends Error {
     constructor() {
         super("myTischtennis rate limit reached");
         this.name = "UpstreamRateLimitError";
+    }
+}
+
+/** myTischtennis hat geantwortet, aber die Daten passen nicht mehr zum erwarteten Format. */
+export class UpstreamFormatError extends Error {
+    constructor(
+        readonly source: string,
+        readonly issues: string[]
+    ) {
+        super(`Unexpected upstream data format in ${source}: ${issues.join("; ")}`);
+        this.name = "UpstreamFormatError";
     }
 }
 

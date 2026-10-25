@@ -1,5 +1,6 @@
 import { ClubScheduleResponseSchema, ClubTeamsResponseSchema } from "../schemas.js";
 import type { ClubScheduleResponse, ClubTeamsResponse } from "../schemas.js";
+import { validateClubSchedule } from "../sources/validate.js";
 import { getJsonFromMytt, getRouteDataWithHtmlFallback } from "./request.js";
 
 export async function getClubTeams(params: {
@@ -18,7 +19,10 @@ export async function getClubTeams(params: {
     });
 }
 
-function buildClubContextPath(params: {
+export const CLUB_SCHEDULE_ROUTE_ID =
+    "routes/click-tt+/$association+/$season+/verein.$clubid.$clubname+/spielplan";
+
+export function buildClubContextPath(params: {
     association: string;
     season: string;
     clubNumber: string;
@@ -48,10 +52,7 @@ export async function getClubSchedule(params: {
     dateStart?: string;
     dateEnd?: string;
 }): Promise<ClubScheduleResponse> {
-    const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/verein.$clubid.$clubname+/spielplan"
-    });
+    const searchParams = new URLSearchParams({ _data: CLUB_SCHEDULE_ROUTE_ID });
 
     if (params.dateStart) {
         searchParams.set("date_start", params.dateStart);
@@ -71,6 +72,7 @@ export async function getClubSchedule(params: {
             page: "spielplan"
         }),
         searchParams,
-        schema: ClubScheduleResponseSchema
+        schema: ClubScheduleResponseSchema,
+        validate: validateClubSchedule
     });
 }

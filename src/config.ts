@@ -74,6 +74,12 @@ export const config = {
         serverErrorThreshold: Math.floor(readNumber("MYTT_BREAKER_5XX_THRESHOLD", 3, 1))
     },
 
+    // Täglicher Abgleich API gegen Webseite auf festen alten Saison Seiten. 0 = aus (lokal).
+    canary: {
+        intervalHours: readNumber("CANARY_INTERVAL_HOURS", 0),
+        alertEmail: process.env.TTTRACKER_ALERT_EMAIL?.trim() || undefined
+    },
+
     cache: {
         maxEntries: Math.floor(readNumber("CACHE_MAX_ENTRIES", 2000, 1)),
         staleMaxAgeMs: readNumber("CACHE_STALE_MAX_AGE_MS", 7 * DAY_MS),

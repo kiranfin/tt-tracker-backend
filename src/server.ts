@@ -9,6 +9,8 @@ import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { playerRoutes } from "./routes/playerRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
+import { adminRoutes } from "./routes/adminRoutes.js";
+import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
 import { getRateLimitStatus } from "./upstream/rateLimiter.js";
 import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
 import { getUpstreamUsage } from "./upstream/tracker.js";
@@ -134,7 +136,8 @@ app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
         cache: getCacheStatus(),
-        upstream: getUpstreamUsage()
+        upstream: getUpstreamUsage(),
+        canary: getLastCanaryReport()
     };
 });
 
@@ -148,6 +151,7 @@ await app.register(meetingRoutes);
 await app.register(myttSessionRoutes);
 await app.register(teamRoutes);
 await app.register(eventRoutes);
+await app.register(adminRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 
@@ -162,6 +166,8 @@ try {
     });
 
     app.log.info(`Server läuft auf http://${host}:${port}`);
+
+    startCanarySchedule();
 
     // Cache vor dem Beenden sichern, damit ein Neustart nicht mit leerem Cache beginnt.
     for (const signal of ["SIGINT", "SIGTERM"] as const) {

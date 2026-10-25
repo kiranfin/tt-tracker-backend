@@ -1,21 +1,26 @@
-import { ZodError } from "zod";
 import { config } from "../config.js";
 import { markLoadOrigin } from "../cache/index.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
-import { UpstreamError, UpstreamRateLimitError } from "../upstream/errors.js";
+import { UpstreamError, UpstreamFormatError } from "../upstream/errors.js";
 import { trackSourceResult, type SourceKind } from "../upstream/tracker.js";
 import { RemixContextParseError } from "./html/remixContext.js";
 
-// Nur Fehler, bei denen genau dieser Pfad kaputt ist. Session Fehler, abgeschaltetes Upstream
-// und lokale Limits (Breaker, Stundenlimit) gehen unverändert durch: dieselbe Quelle gäbe dasselbe Ergebnis.
-function canFallBack(error: unknown) {
-    return (
-        error instanceof UpstreamError ||
-        error instanceof UpstreamRateLimitError ||
-        error instanceof ZodError ||
-        error instanceof RemixContextParseError
-    );
+// Nur Fehler, bei denen der andere Weg etwas bringen kann. Nicht dazu gehören:
+// - Session Fehler, abgeschaltetes Upstream und lokale Limits (Breaker, Stundenlimit): dieselbe Quelle gäbe dasselbe Ergebnis.
+// - 4xx (z.B. 404): die Seite gäbe dieselbe Antwort, der Fallback würde nur Requests verdoppeln.
+// - 429: der Breaker ist danach ohnehin offen.
+// - Formatfehler, außer der Aufrufer hat einen unabhängigen zweiten Parser (fallbackOnFormatError).
+function canFallBack(error: unknown, fallbackOnFormatError: boolean) {
+    if (error instanceof UpstreamError) {
+        return error.status === undefined || error.status >= 500;
+    }
+
+    if (error instanceof UpstreamFormatError || error instanceof RemixContextParseError) {
+        return fallbackOnFormatError;
+    }
+
+    return false;
 }
 
 function logSource(params: {
@@ -34,7 +39,8 @@ function logSource(params: {
         source: params.source,
         ok: params.ok,
         errorName: params.error instanceof Error ? params.error.name : undefined,
-        errorMessage: params.error instanceof Error ? params.error.message : undefined
+        errorMessage: params.error instanceof Error ? params.error.message : undefined,
+        issues: params.error instanceof UpstreamFormatError ? params.error.issues : undefined
     });
 }
 
@@ -73,6 +79,9 @@ export async function fetchWithFallback<T>(params: {
     primary: () => Promise<T>;
     fallback: () => Promise<T>;
     primarySource?: SourceKind;
+    // Auch bei Formatfehlern (UpstreamFormatError, RemixContextParseError) den anderen Weg probieren.
+    // Nur sinnvoll, wenn dessen Parser unabhängig vom ersten arbeitet.
+    fallbackOnFormatError?: boolean;
 }): Promise<T> {
     const primarySource = params.primarySource ?? "api";
     const fallbackSource: SourceKind = primarySource === "api" ? "html" : "api";
@@ -80,7 +89,7 @@ export async function fetchWithFallback<T>(params: {
     try {
         return await runStep(params.name, primarySource, params.primary);
     } catch (primaryError) {
-        if (!canFallBack(primaryError)) {
+        if (!canFallBack(primaryError, params.fallbackOnFormatError ?? false)) {
             throw primaryError;
         }
 

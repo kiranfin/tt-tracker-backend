@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-    extractPromotionStatesFromTableHtml,
-    parseLeagueTableFromHtmlTable
+    parseLeagueTableFromHtmlTable,
+    promotionStateOfApiRow
 } from "../src/sources/html/leagueTable.js";
 import {
     getRouteDataFromHtml,
@@ -77,12 +77,13 @@ describe("remix context", () => {
 });
 
 describe("league table page", () => {
-    it("reads promotion and relegation icons per row", () => {
-        assert.deepEqual(extractPromotionStatesFromTableHtml(TABLE_HTML), [
-            "promotion",
-            "none",
-            "relegation"
-        ]);
+    it("maps API rise/fall values to promotion states", () => {
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: "rise" }), "promotion");
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: "fall", tendency: "rise" }), "relegation");
+        assert.equal(promotionStateOfApiRow({ tendency: "rise" }), "promotion");
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: null, tendency: "fall" }), "relegation");
+        assert.equal(promotionStateOfApiRow({ tendency: "none" }), "none");
+        assert.equal(promotionStateOfApiRow({}), "none");
     });
 
     it("parses the visible table as last resort", () => {
@@ -97,10 +98,49 @@ describe("league table page", () => {
         assert.equal(data[0].matches_lost, 43);
         assert.equal(data[0].points_won, 26);
         assert.equal(data[0].points_lost, 2);
+        assert.equal(data[0].matches_relation, "+80");
         assert.deepEqual(
             data.map((row) => row.promotion_state),
             ["promotion", "none", "relegation"]
         );
+    });
+
+    it("ignores a second table behind the league table and reads columns by header", () => {
+        const swapped = `
+<html><body>
+<table>
+  <thead><tr><th>Punkte</th><th>Mannschaft</th><th>+/-</th><th>Rang</th><th>Spiele</th></tr></thead>
+  <tbody>
+    <tr><td>26:2</td><td><a href="/x/mannschaft/777/Team_A/y">Team A</a></td><td>+80</td><td><svg><use href="/i.svg#rise"></use></svg>1</td><td>123:43</td></tr>
+    <tr><td>12:16</td><td><a href="/x/mannschaft/888/Team_B/y">Team B</a></td><td>-10</td><td>2</td><td>60:70</td></tr>
+  </tbody>
+</table>
+<table>
+  <thead><tr><th>Datum</th><th>Heim</th><th>Gast</th></tr></thead>
+  <tbody>
+    <tr><td>01.09.</td><td><svg><use href="/i.svg#fall"></use></svg>Team C</td><td>Team D</td></tr>
+  </tbody>
+</table>
+</body></html>`;
+
+        const { data } = parseLeagueTableFromHtmlTable(swapped);
+
+        assert.equal(data.length, 2);
+        assert.equal(data[0].team_name, "Team A");
+        assert.equal(data[0].table_rank, 1);
+        assert.equal(data[0].points_won, 26);
+        assert.equal(data[0].matches_relation, "+80");
+        assert.equal(data[0].matches_won, 123);
+        assert.deepEqual(
+            data.map((row) => row.promotion_state),
+            ["promotion", "none"]
+        );
+    });
+
+    it("rejects a table without the required columns", () => {
+        const html = "<table><thead><tr><th>Rang</th><th>Mannschaft</th></tr></thead><tbody><tr><td>1</td><td>A</td></tr></tbody></table>";
+
+        assert.throws(() => parseLeagueTableFromHtmlTable(html), RemixContextParseError);
     });
 
     it("rejects a page without a league table", () => {

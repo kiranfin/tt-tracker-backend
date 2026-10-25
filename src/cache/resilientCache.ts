@@ -71,21 +71,21 @@ export class ResilientCache {
 
         if (entry && now <= entry.expiresAt) {
             this.counters.hits += 1;
-            return this.toResult<T>(entry.value, "cache", entry.fetchedAt);
+            return this.toResult<T>(entry.value, "cache", entry.origin, entry.fetchedAt);
         }
 
         const stale = entry && this.isUsableStale(entry) ? entry : undefined;
 
         if (stale?.retryAt && now < stale.retryAt) {
             this.counters.staleServed += 1;
-            return this.toResult<T>(stale.value, "stale", stale.fetchedAt);
+            return this.toResult<T>(stale.value, "stale", stale.origin, stale.fetchedAt);
         }
 
         this.counters.misses += 1;
 
         try {
             const loaded = await this.loadShared(params);
-            return this.toResult<T>(loaded.value, loaded.origin, loaded.fetchedAt);
+            return this.toResult<T>(loaded.value, loaded.origin, loaded.origin, loaded.fetchedAt);
         } catch (error) {
             this.counters.loadFailures += 1;
 
@@ -104,7 +104,7 @@ export class ResilientCache {
                 error
             });
 
-            return this.toResult<T>(fallback.value, "stale", fallback.fetchedAt);
+            return this.toResult<T>(fallback.value, "stale", fallback.origin, fallback.fetchedAt);
         }
     }
 
@@ -216,11 +216,13 @@ export class ResilientCache {
     private toResult<T>(
         value: unknown,
         source: ReadThroughResult<T>["source"],
+        origin: LoadOrigin,
         fetchedAt: number
     ): ReadThroughResult<T> {
         return {
             value: value as T,
             source,
+            origin,
             fetchedAt: new Date(fetchedAt).toISOString()
         };
     }

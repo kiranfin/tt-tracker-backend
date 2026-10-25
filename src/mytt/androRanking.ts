@@ -1,5 +1,6 @@
 import { ClubPlayersResponseSchema } from "../schemas.js";
 import type { ClubPlayersResponse } from "../schemas.js";
+import { parseUpstream } from "../upstream/parse.js";
 import { getRouteDataWithHtmlFallback } from "./request.js";
 import { searchClubs } from "./search.js";
 import { asNullableNumber, asNullableString, asRecord } from "./values.js";
@@ -109,14 +110,19 @@ function findAndroRankingBlock(value: unknown): Record<string, unknown> | null {
     return null;
 }
 
-function getAndroEntriesCount(value: unknown) {
+export function getAndroEntriesCount(value: unknown) {
     const block = findAndroRankingBlock(value);
     const entries = Array.isArray(block?.entries) ? block.entries : [];
 
     return entries.length;
 }
 
-function buildAndroRankingSearchParams(params: {
+export const ANDRO_RANKING_PATH = "/rankings/andro-rangliste";
+
+// Die Seite liefert JSON nur mit diesem User Agent.
+export const ANDRO_RANKING_HEADERS = { "user-agent": "curl/8.4.0" };
+
+export function buildAndroRankingSearchParams(params: {
     organization: string;
     androClubNr: string;
 }) {
@@ -146,18 +152,16 @@ async function fetchAndroRankingRaw(params: {
         androClubNr: params.androClubNr
     });
 
-    const sourcePath = `/rankings/andro-rangliste?${searchParams.toString()}`;
+    const sourcePath = `${ANDRO_RANKING_PATH}?${searchParams.toString()}`;
 
     const raw = await getRouteDataWithHtmlFallback({
         name: "andro_ranking",
-        path: "/rankings/andro-rangliste",
+        path: ANDRO_RANKING_PATH,
         searchParams,
         schema: {
             parse: (value) => value
         },
-        extraHeaders: {
-            "user-agent": "curl/8.4.0"
-        }
+        extraHeaders: ANDRO_RANKING_HEADERS
     });
 
     return {
@@ -299,7 +303,7 @@ function normalizeAndroRankingResponse(params: {
     const block = findAndroRankingBlock(params.value);
 
     if (!block) {
-        return ClubPlayersResponseSchema.parse({
+        return parseUpstream(ClubPlayersResponseSchema, {
             data: [],
             pagination: {
                 page: 1,
@@ -315,7 +319,7 @@ function normalizeAndroRankingResponse(params: {
             requested_club_nr: params.clickttClubId,
             resolution_source: params.resolutionSource,
             error: null
-        });
+        }, "andro_ranking");
     }
 
     const entries = Array.isArray(block.entries) ? block.entries : [];
@@ -384,7 +388,7 @@ function normalizeAndroRankingResponse(params: {
         };
     });
 
-    return ClubPlayersResponseSchema.parse({
+    return parseUpstream(ClubPlayersResponseSchema, {
         data,
         pagination: {
             page: (asNullableNumber(block.currentPage) ?? 0) + 1,
@@ -400,7 +404,7 @@ function normalizeAndroRankingResponse(params: {
         requested_club_nr: params.clickttClubId,
         resolution_source: params.resolutionSource,
         error: null
-    });
+    }, "andro_ranking");
 }
 
 export async function getClubPlayersFromAndroRanking(params: {

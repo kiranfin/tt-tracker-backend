@@ -13,11 +13,19 @@ import type {
     TeamSimpleScheduleResponse
 } from "../schemas.js";
 import { toLeagueSlug } from "./league.js";
+import { validateTeamSchedule } from "../sources/validate.js";
 import { getJsonFromMytt, getRouteDataWithHtmlFallback } from "./request.js";
 
 type TeamRoundFilter = "gesamt" | "vr" | "rr";
 
-function buildTeamContextPath(params: {
+const TEAM_ROUTE_PREFIX =
+    "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+";
+
+export const TEAM_INFOS_ROUTE_ID = `${TEAM_ROUTE_PREFIX}/infos`;
+export const TEAM_SCHEDULE_ROUTE_ID = `${TEAM_ROUTE_PREFIX}/spielplan.$filter`;
+export const TEAM_BALANCES_ROUTE_ID = `${TEAM_ROUTE_PREFIX}/spielerbilanzen.$filter`;
+
+export function buildTeamContextPath(params: {
     association: string;
     season: string;
     groupId: string;
@@ -89,10 +97,7 @@ export async function getTeamInfos(params: {
     teamId: string;
     teamNameSlug?: string;
 }): Promise<TeamInfoResponse> {
-    const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/infos"
-    });
+    const searchParams = new URLSearchParams({ _data: TEAM_INFOS_ROUTE_ID });
 
     return getRouteDataWithHtmlFallback({
         name: "team_infos",
@@ -116,10 +121,7 @@ export async function getTeamSchedule(params: {
 }): Promise<TeamScheduleResponse> {
     const filter = params.filter ?? "gesamt";
 
-    const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielplan.$filter"
-    });
+    const searchParams = new URLSearchParams({ _data: TEAM_SCHEDULE_ROUTE_ID });
 
     return getRouteDataWithHtmlFallback({
         name: "team_schedule",
@@ -129,7 +131,8 @@ export async function getTeamSchedule(params: {
             filter
         }),
         searchParams,
-        schema: TeamScheduleResponseSchema
+        schema: TeamScheduleResponseSchema,
+        validate: validateTeamSchedule
     });
 }
 
@@ -144,10 +147,7 @@ export async function getTeamBalances(params: {
 }): Promise<TeamBalancesResponse> {
     const filter = params.filter ?? "gesamt";
 
-    const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielerbilanzen.$filter"
-    });
+    const searchParams = new URLSearchParams({ _data: TEAM_BALANCES_ROUTE_ID });
 
     return getRouteDataWithHtmlFallback({
         name: "team_balances",

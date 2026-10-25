@@ -31,6 +31,37 @@ describe("ResilientCache", () => {
         assert.equal(loads, 1);
     });
 
+    it("keeps the origin of an html load on cache hits and stale answers", async () => {
+        const { cache, clock } = createCache();
+
+        const loaded = await cache.readThrough({
+            key: "k",
+            ttlMs: 1000,
+            load: async () => {
+                markLoadOrigin("html");
+                return "page";
+            }
+        });
+        const hit = await cache.readThrough({ key: "k", ttlMs: 1000, load: async () => "never" });
+
+        assert.equal(loaded.origin, "html");
+        assert.equal(hit.source, "cache");
+        assert.equal(hit.origin, "html");
+
+        clock.now += 2000;
+
+        const stale = await cache.readThrough({
+            key: "k",
+            ttlMs: 1000,
+            load: async () => {
+                throw new Error("down");
+            }
+        });
+
+        assert.equal(stale.source, "stale");
+        assert.equal(stale.origin, "html");
+    });
+
     it("shares one load between concurrent callers", async () => {
         const { cache } = createCache();
         let loads = 0;

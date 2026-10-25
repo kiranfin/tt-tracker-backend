@@ -10,6 +10,7 @@ import {
     normalizeSeason,
     resolveAssociation
 } from "../mytt/index.js";
+import { isEmptyLeagueSchedule, isEmptyLeagueTable, ttlUnlessEmpty } from "../sources/validate.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -282,7 +283,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         try {
             const result = await readThrough({
                 key: `league-table:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
-                ttlMs: CACHE_TTL.LEAGUE_TABLE,
+                ttlMs: ttlUnlessEmpty(CACHE_TTL.LEAGUE_TABLE, isEmptyLeagueTable),
                 load: () =>
                     getLeagueTable({
                         association,
@@ -341,7 +342,7 @@ export async function leagueRoutes(app: FastifyInstance) {
             try {
                 const result = await readThrough({
                     key: `league-schedule:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
-                    ttlMs: CACHE_TTL.LEAGUE_SCHEDULE,
+                    ttlMs: ttlUnlessEmpty(CACHE_TTL.LEAGUE_SCHEDULE, isEmptyLeagueSchedule),
                     load: () =>
                         getLeagueSchedule({
                             association,

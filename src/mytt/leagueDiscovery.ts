@@ -1,4 +1,6 @@
+import { fetchWithFallback } from "../sources/fetchWithFallback.js";
 import { fetchHtmlPage } from "../sources/html/fetchPage.js";
+import { UpstreamFormatError } from "../upstream/errors.js";
 import { getJsonFromMytt } from "./request.js";
 
 export const DEFAULT_SEASON = "25--26";
@@ -291,6 +293,7 @@ function fetchMyttPage(pathSegments: string[]) {
 
 function fetchMyttJson<T>(pathSegments: string[], query: Record<string, string | undefined>) {
     return getJsonFromMytt({
+        name: "league_hierarchy",
         path: toPath(pathSegments),
         searchParams: toSearchParams(query),
         schema: { parse: (value) => value as T }
@@ -510,12 +513,7 @@ function extractLeagueClassLinks(
     return result;
 }
 
-export async function loadLeagueClasses(params: {
-    association: string;
-    season: string;
-    championship: string;
-    competitionType: "ligen" | "pokalspiele";
-}): Promise<{
+type LoadedLeagueClasses = {
     sections: Array<{
         contest: string | null;
         groups: LeagueClassReference[];
@@ -523,57 +521,78 @@ export async function loadLeagueClasses(params: {
     classes: LeagueClassReference[];
     raw: LeagueHierarchyUpstream | null;
     strategy: "json" | "html";
-}> {
+};
+
+export async function loadLeagueClasses(params: {
+    association: string;
+    season: string;
+    championship: string;
+    competitionType: "ligen" | "pokalspiele";
+}): Promise<LoadedLeagueClasses> {
     const { association, season, championship, competitionType } = params;
 
-    try {
-        const raw = await fetchMyttJson<LeagueHierarchyUpstream>(
-            ["click-tt", association, season, competitionType, championship],
-            {
-                _data: "routes/click-tt+/$association+/$season+/$type+/$championship"
+    return fetchWithFallback<LoadedLeagueClasses>({
+        name: "league_hierarchy",
+        // Die Seite hat einen eigenen Parser (Links), unabhängig vom JSON Format.
+        fallbackOnFormatError: true,
+        primary: async () => {
+            const raw = await fetchMyttJson<LeagueHierarchyUpstream>(
+                ["click-tt", association, season, competitionType, championship],
+                {
+                    _data: "routes/click-tt+/$association+/$season+/$type+/$championship"
+                }
+            );
+
+            let normalized: ReturnType<typeof normalizeLeagueHierarchy>;
+
+            try {
+                normalized = normalizeLeagueHierarchy(
+                    raw,
+                    association,
+                    season,
+                    championship,
+                    competitionType
+                );
+            } catch (error) {
+                throw new UpstreamFormatError("league_hierarchy", [
+                    error instanceof Error ? error.message : "unreadable hierarchy"
+                ]);
             }
-        );
 
-        const normalized = normalizeLeagueHierarchy(
-            raw,
-            association,
-            season,
-            championship,
-            competitionType
-        );
+            if (normalized.classes.length === 0) {
+                throw new UpstreamFormatError("league_hierarchy", ["no classes"]);
+            }
 
-        if (normalized.classes.length > 0) {
             return normalized;
+        },
+        fallback: async () => {
+            const html = await fetchMyttPage([
+                "click-tt",
+                association,
+                season,
+                competitionType,
+                championship
+            ]);
+
+            const classes = extractLeagueClassLinks(
+                html,
+                association,
+                season,
+                championship,
+                competitionType
+            );
+
+            return {
+                sections: [
+                    {
+                        contest: null,
+                        groups: classes
+                    }
+                ],
+                classes,
+                raw: null,
+                strategy: "html" as const
+            };
         }
-    } catch {
-        // Fallback auf HTML darunter.
-    }
-
-    const html = await fetchMyttPage([
-        "click-tt",
-        association,
-        season,
-        competitionType,
-        championship
-    ]);
-
-    const classes = extractLeagueClassLinks(
-        html,
-        association,
-        season,
-        championship,
-        competitionType
-    );
-
-    return {
-        sections: [
-            {
-                contest: null,
-                groups: classes
-            }
-        ],
-        classes,
-        raw: null,
-        strategy: "html"
-    };
+    });
 }

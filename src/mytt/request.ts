@@ -16,12 +16,15 @@ import {
     UpstreamRateLimitError
 } from "../upstream/errors.js";
 import { fetchUpstreamText } from "../upstream/fetch.js";
+import { parseUpstream } from "../upstream/parse.js";
 
 type Schema<T> = {
     parse: (value: unknown) => T;
 };
 
 type JsonRequestParams<T> = {
+    // Name der Quelle für Format Fehler, Standard ist der Pfad.
+    name?: string;
     path: string;
     searchParams?: URLSearchParams;
     body?: URLSearchParams;
@@ -143,10 +146,10 @@ async function requestJson<T>(
         }
 
         if (!response.ok) {
-            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+            throw new UpstreamError(`Upstream returned HTTP ${response.status}`, response.status);
         }
 
-        return params.schema.parse(parseJsonBody(bodyText, params.path));
+        return parseUpstream(params.schema, parseJsonBody(bodyText, params.path), params.name ?? params.path);
     } catch (error) {
         void writeJsonLog("mytt_upstream_error", {
             requestId: context?.requestId,
@@ -183,18 +186,24 @@ export function getRouteDataWithHtmlFallback<T>(params: {
     searchParams: URLSearchParams;
     schema: Schema<T>;
     extraHeaders?: Record<string, string>;
+    // Plausibilitätsprüfung nach dem Schema, auf beiden Wegen. Wirft UpstreamFormatError.
+    validate?: (value: T, source: string) => T;
 }): Promise<T> {
     const routeId = params.searchParams.get("_data") ?? "";
 
     return fetchWithFallback({
         name: params.name,
-        primary: () =>
-            getJsonFromMytt({
+        primary: async () => {
+            const value = await getJsonFromMytt({
+                name: params.name,
                 path: params.path,
                 searchParams: params.searchParams,
                 schema: params.schema,
                 extraHeaders: params.extraHeaders
-            }),
+            });
+
+            return params.validate ? params.validate(value, params.name) : value;
+        },
         fallback: async () => {
             const { routeData } = await getRouteDataFromPage({
                 path: params.path,
@@ -202,7 +211,9 @@ export function getRouteDataWithHtmlFallback<T>(params: {
                 routeId
             });
 
-            return params.schema.parse(routeData);
+            const value = parseUpstream(params.schema, routeData, `${params.name}:html`);
+
+            return params.validate ? params.validate(value, `${params.name}:html`) : value;
         }
     });
 }

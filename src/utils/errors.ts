@@ -9,12 +9,24 @@ import {
     LocalRateLimitError,
     UpstreamDisabledError,
     UpstreamError,
+    UpstreamFormatError,
     UpstreamRateLimitError
 } from "../upstream/errors.js";
 import { InvalidTokenError } from "../authToken.js";
 import { UserNotFoundError } from "../authStore.js";
 
 export function handleApiError(error: unknown, reply: FastifyReply) {
+    // Vor ZodError: ein geändertes Format bei myTischtennis ist kein Fehler des Clients.
+    if (error instanceof UpstreamFormatError) {
+        return reply.code(502).send({
+            error: {
+                code: "UPSTREAM_FORMAT_CHANGED",
+                message:
+                    "myTischtennis hat das Datenformat geändert. Daten können gerade nicht gelesen werden."
+            }
+        });
+    }
+
     if (error instanceof ZodError) {
         return reply.code(400).send({
             error: {

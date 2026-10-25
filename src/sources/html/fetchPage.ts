@@ -36,7 +36,7 @@ export async function fetchHtmlPage(params: {
     }
 
     if (!response.ok) {
-        throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
+        throw new UpstreamError(`Upstream returned HTTP ${response.status}`, response.status);
     }
 
     const contentType = response.headers.get("content-type") ?? "";
