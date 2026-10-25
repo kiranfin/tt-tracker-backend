@@ -1,20 +1,19 @@
 import type { FastifyInstance } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
+import { readThrough } from "../cache/index.js";
 import {
     getTeamBalances,
     getTeamInfos,
     getTeamPlayers,
     getTeamSchedule,
     getTeamSimpleSchedule
-} from "../myttClient.js";
-import type {
-    TeamBalancesResponse,
-    TeamInfoResponse,
-    TeamPlayersResponse,
-    TeamScheduleResponse,
-    TeamSimpleScheduleResponse
-} from "../schemas.js";
+} from "../mytt/index.js";
+import {
+    isEmptyTeamBalances,
+    isEmptyTeamSchedule,
+    ttlUnlessEmpty
+} from "../sources/validate.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 const DEFAULT_SEASON = "25--26";
 
@@ -85,28 +84,16 @@ export async function teamRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `team-players:${teamId}`;
-        const cached = getFromCache<TeamPlayersResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getTeamPlayers({ teamId });
-
-            setCache(cacheKey, result, TEAM_CACHE_TTL.PLAYERS);
+            const result = await readThrough({
+                key: `team-players:${teamId}`,
+                ttlMs: TEAM_CACHE_TTL.PLAYERS,
+                load: () => getTeamPlayers({ teamId })
+            });
 
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -133,28 +120,16 @@ export async function teamRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `team-simple-schedule:${teamId}:${season}`;
-        const cached = getFromCache<TeamSimpleScheduleResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getTeamSimpleSchedule({ teamId, season });
-
-            setCache(cacheKey, result, TEAM_CACHE_TTL.SIMPLE_SCHEDULE);
+            const result = await readThrough({
+                key: `team-simple-schedule:${teamId}:${season}`,
+                ttlMs: TEAM_CACHE_TTL.SIMPLE_SCHEDULE,
+                load: () => getTeamSimpleSchedule({ teamId, season })
+            });
 
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -190,35 +165,24 @@ export async function teamRoutes(app: FastifyInstance) {
                 });
             }
 
-            const cacheKey = `team-infos:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}`;
-            const cached = getFromCache<TeamInfoResponse>(cacheKey);
-
-            if (cached) {
-                return {
-                    data: cached,
-                    meta: {
-                        source: "cache"
-                    }
-                };
-            }
-
             try {
-                const result = await getTeamInfos({
-                    association,
-                    season,
-                    groupId,
-                    leagueSlug,
-                    teamId,
-                    teamNameSlug
+                const result = await readThrough({
+                    key: `team-infos:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}`,
+                    ttlMs: TEAM_CACHE_TTL.INFOS,
+                    load: () =>
+                        getTeamInfos({
+                            association,
+                            season,
+                            groupId,
+                            leagueSlug,
+                            teamId,
+                            teamNameSlug
+                        })
                 });
 
-                setCache(cacheKey, result, TEAM_CACHE_TTL.INFOS);
-
                 return {
-                    data: result,
-                    meta: {
-                        source: "upstream"
-                    }
+                    data: result.value,
+                    meta: buildMeta(result)
                 };
             } catch (error) {
                 request.log.error(error);
@@ -256,36 +220,25 @@ export async function teamRoutes(app: FastifyInstance) {
                 });
             }
 
-            const cacheKey = `team-schedule:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`;
-            const cached = getFromCache<TeamScheduleResponse>(cacheKey);
-
-            if (cached) {
-                return {
-                    data: cached,
-                    meta: {
-                        source: "cache"
-                    }
-                };
-            }
-
             try {
-                const result = await getTeamSchedule({
-                    association,
-                    season,
-                    groupId,
-                    leagueSlug,
-                    teamId,
-                    teamNameSlug,
-                    filter
+                const result = await readThrough({
+                    key: `team-schedule:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
+                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.SCHEDULE, isEmptyTeamSchedule),
+                    load: () =>
+                        getTeamSchedule({
+                            association,
+                            season,
+                            groupId,
+                            leagueSlug,
+                            teamId,
+                            teamNameSlug,
+                            filter
+                        })
                 });
 
-                setCache(cacheKey, result, TEAM_CACHE_TTL.SCHEDULE);
-
                 return {
-                    data: result,
-                    meta: {
-                        source: "upstream"
-                    }
+                    data: result.value,
+                    meta: buildMeta(result)
                 };
             } catch (error) {
                 request.log.error(error);
@@ -323,36 +276,25 @@ export async function teamRoutes(app: FastifyInstance) {
                 });
             }
 
-            const cacheKey = `team-balances:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`;
-            const cached = getFromCache<TeamBalancesResponse>(cacheKey);
-
-            if (cached) {
-                return {
-                    data: cached,
-                    meta: {
-                        source: "cache"
-                    }
-                };
-            }
-
             try {
-                const result = await getTeamBalances({
-                    association,
-                    season,
-                    groupId,
-                    leagueSlug,
-                    teamId,
-                    teamNameSlug,
-                    filter
+                const result = await readThrough({
+                    key: `team-balances:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
+                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.BALANCES, isEmptyTeamBalances),
+                    load: () =>
+                        getTeamBalances({
+                            association,
+                            season,
+                            groupId,
+                            leagueSlug,
+                            teamId,
+                            teamNameSlug,
+                            filter
+                        })
                 });
 
-                setCache(cacheKey, result, TEAM_CACHE_TTL.BALANCES);
-
                 return {
-                    data: result,
-                    meta: {
-                        source: "upstream"
-                    }
+                    data: result.value,
+                    meta: buildMeta(result)
                 };
             } catch (error) {
                 request.log.error(error);

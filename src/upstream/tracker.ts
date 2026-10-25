@@ -34,6 +34,53 @@ export function trackUpstreamRequest(entry: Omit<UpstreamRequestEntry, "timestam
     });
 }
 
+export type SourceKind = "api" | "html";
+
+type SourceCounter = {
+    ok: number;
+    failed: number;
+    lastOkAt: string | null;
+    lastFailedAt: string | null;
+    lastError: string | null;
+};
+
+// Zähler seit Prozessstart: pro Funktion und Quelle, damit eine dauerhaft kaputte API auffällt.
+const sourceStats = new Map<string, Record<SourceKind, SourceCounter>>();
+
+function emptyCounter(): SourceCounter {
+    return { ok: 0, failed: 0, lastOkAt: null, lastFailedAt: null, lastError: null };
+}
+
+export function trackSourceResult(params: {
+    name: string;
+    source: SourceKind;
+    ok: boolean;
+    error?: unknown;
+}) {
+    let entry = sourceStats.get(params.name);
+
+    if (!entry) {
+        entry = { api: emptyCounter(), html: emptyCounter() };
+        sourceStats.set(params.name, entry);
+    }
+
+    const counter = entry[params.source];
+    const now = new Date().toISOString();
+
+    if (params.ok) {
+        counter.ok += 1;
+        counter.lastOkAt = now;
+        return;
+    }
+
+    counter.failed += 1;
+    counter.lastFailedAt = now;
+    counter.lastError =
+        params.error instanceof Error
+            ? `${params.error.name}: ${params.error.message}`
+            : "Unknown error";
+}
+
 export function getUpstreamUsage() {
     cleanupOldRequests();
 
@@ -55,6 +102,7 @@ export function getUpstreamUsage() {
         byPath,
         byStatus,
         byMethod,
+        sources: Object.fromEntries(sourceStats),
         recent: upstreamRequests.slice(-30).reverse().map((request) => ({
             ...request,
             ageSeconds: Math.round((now - request.timestamp) / 1000)

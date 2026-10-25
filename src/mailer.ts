@@ -1,4 +1,5 @@
 import nodemailer, { type Transporter } from "nodemailer";
+import { config } from "./config.js";
 
 export class MailNotConfiguredError extends Error {
     constructor() {
@@ -73,6 +74,29 @@ async function sendMail(params: {
         subject: params.subject,
         html: params.html,
         text: params.text
+    });
+}
+
+function escapeHtml(value: string) {
+    return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/**
+ * Meldung an den Betreiber (TTTRACKER_ALERT_EMAIL), z.B. wenn myTischtennis das Format ändert.
+ * Wirft MailNotConfiguredError, wenn keine Adresse oder kein SMTP konfiguriert ist.
+ */
+export async function sendAlertEmail(subject: string, text: string): Promise<void> {
+    const to = config.canary.alertEmail;
+
+    if (!to) {
+        throw new MailNotConfiguredError();
+    }
+
+    await sendMail({
+        to,
+        subject,
+        text,
+        html: `<pre style="font-family:monospace;font-size:13px;white-space:pre-wrap">${escapeHtml(text)}</pre>`
     });
 }
 

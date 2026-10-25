@@ -9,8 +9,11 @@ import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { playerRoutes } from "./routes/playerRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
-import { getRateLimitStatus } from "./rateLimiter.js";
-import { getUpstreamUsage } from "./upstreamTracker.js";
+import { adminRoutes } from "./routes/adminRoutes.js";
+import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
+import { getRateLimitStatus } from "./upstream/rateLimiter.js";
+import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
+import { getUpstreamUsage } from "./upstream/tracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
 import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
@@ -18,6 +21,8 @@ import { authRoutes } from "./routes/authRoutes.js";
 import { passwordResetRoutes } from "./routes/passwordResetRoutes.js";
 import { attachOptionalAppUser } from "./authRequest.js";
 import { getRequestContext } from "./requestContext.js";
+
+await initCachePersistence();
 
 const app = Fastify({
     logger: true,
@@ -130,7 +135,9 @@ app.addHook("preHandler", async (request, reply) => {
 app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
-        upstream: getUpstreamUsage()
+        cache: getCacheStatus(),
+        upstream: getUpstreamUsage(),
+        canary: getLastCanaryReport()
     };
 });
 
@@ -144,6 +151,7 @@ await app.register(meetingRoutes);
 await app.register(myttSessionRoutes);
 await app.register(teamRoutes);
 await app.register(eventRoutes);
+await app.register(adminRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
 
@@ -158,6 +166,18 @@ try {
     });
 
     app.log.info(`Server läuft auf http://${host}:${port}`);
+
+    startCanarySchedule();
+
+    // Cache vor dem Beenden sichern, damit ein Neustart nicht mit leerem Cache beginnt.
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        process.once(signal, () => {
+            void app
+                .close()
+                .then(() => flushCacheToDisk())
+                .finally(() => process.exit(0));
+        });
+    }
 } catch (error) {
     app.log.error(error);
     process.exit(1);
