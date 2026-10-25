@@ -1,17 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
+import { readThrough } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
 import {
     getClubPlayersFromAndroRanking,
     getClubSchedule,
     getClubTeams
 } from "../myttClient.js";
-import type {
-    ClubPlayersResponse,
-    ClubScheduleResponse,
-    ClubTeamsResponse
-} from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 const CLUB_SCHEDULE_CACHE_TTL =
     (CACHE_TTL as Record<string, number>).CLUB_SCHEDULE ?? CACHE_TTL.CLUB_TEAMS;
@@ -57,31 +53,20 @@ export async function clubRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `club-teams:${organization}:${clubNumber}`;
-        const cached = getFromCache<ClubTeamsResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getClubTeams({
-                organization,
-                clubNumber
+            const result = await readThrough({
+                key: `club-teams:${organization}:${clubNumber}`,
+                ttlMs: CACHE_TTL.CLUB_TEAMS,
+                load: () =>
+                    getClubTeams({
+                        organization,
+                        clubNumber
+                    })
             });
 
-            setCache(cacheKey, result, CACHE_TTL.CLUB_TEAMS);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -128,32 +113,22 @@ export async function clubRoutes(app: FastifyInstance) {
             clubName ?? ""
         ].join(":");
 
-        const cached = getFromCache<ClubPlayersResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getClubPlayersFromAndroRanking({
-                organization,
-                clubNumber,
-                androClubNr,
-                clubName
+            const result = await readThrough({
+                key: cacheKey,
+                ttlMs: CLUB_PLAYERS_CACHE_TTL,
+                load: () =>
+                    getClubPlayersFromAndroRanking({
+                        organization,
+                        clubNumber,
+                        androClubNr,
+                        clubName
+                    })
             });
 
-            setCache(cacheKey, result, CLUB_PLAYERS_CACHE_TTL);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -212,34 +187,24 @@ export async function clubRoutes(app: FastifyInstance) {
             dateEnd ?? ""
         ].join(":");
 
-        const cached = getFromCache<ClubScheduleResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getClubSchedule({
-                organization,
-                clubNumber,
-                season,
-                clubSlug,
-                dateStart,
-                dateEnd
+            const result = await readThrough({
+                key: cacheKey,
+                ttlMs: CLUB_SCHEDULE_CACHE_TTL,
+                load: () =>
+                    getClubSchedule({
+                        organization,
+                        clubNumber,
+                        season,
+                        clubSlug,
+                        dateStart,
+                        dateEnd
+                    })
             });
 
-            setCache(cacheKey, result, CLUB_SCHEDULE_CACHE_TTL);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);

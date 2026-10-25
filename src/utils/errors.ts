@@ -10,7 +10,7 @@ import {
     UpstreamDisabledError,
     UpstreamError,
     UpstreamRateLimitError
-} from "../myttClient.js";
+} from "../upstreamErrors.js";
 import { InvalidTokenError } from "../authToken.js";
 import { UserNotFoundError } from "../authStore.js";
 
@@ -92,13 +92,18 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
 
         reply.header("Retry-After", String(retryAfterSeconds));
 
+        // Breaker offen: myTischtennis selbst hat gebremst, nicht das eigene Backend.
+        const message =
+            error.reason === "breaker_open"
+                ? "myTischtennis ist gerade rate-limited. Bitte später erneut versuchen."
+                : retryAfterMinutes <= 1
+                    ? "Das eigene Backend hat das gesetzte Anfrage-Limit erreicht. Bitte in etwa 1 Minute erneut versuchen."
+                    : `Das eigene Backend hat das gesetzte Anfrage-Limit erreicht. Bitte in etwa ${retryAfterMinutes} Minuten erneut versuchen.`;
+
         return reply.code(429).send({
             error: {
                 code: "RATE_LIMITED",
-                message:
-                    retryAfterMinutes <= 1
-                        ? "Das eigene Backend hat das gesetzte Anfrage-Limit erreicht. Bitte in etwa 1 Minute erneut versuchen."
-                        : `Das eigene Backend hat das gesetzte Anfrage-Limit erreicht. Bitte in etwa ${retryAfterMinutes} Minuten erneut versuchen.`,
+                message,
                 retryAfterSeconds,
                 retryAfterMinutes,
                 retryAt

@@ -1,3 +1,5 @@
+import { ZodError } from "zod";
+
 import {
     PlayerSearchResponseSchema,
     ClubSearchResponseSchema,
@@ -44,19 +46,31 @@ import {
 
 import { getRequestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
-import { assertCanCallUpstream, LocalRateLimitError } from "./rateLimiter.js";
-
-const MYTT_BASE_URL =
-    process.env.MYTT_BASE_URL ?? "https://www.mytischtennis.de";
-
-const upstreamEnabled = process.env.MYTT_UPSTREAM_ENABLED !== "false";
-
-function shouldCountTowardsLocalRateLimit(params: {
-    path: string;
-    countTowardsLocalRateLimit?: boolean;
-}) {
-    return params.countTowardsLocalRateLimit ?? !params.path.startsWith("/api/ttr/");
-}
+import { LocalRateLimitError } from "./rateLimiter.js";
+import { fetchUpstreamText } from "./upstreamFetch.js";
+import {
+    API_TIMEOUT_MS,
+    htmlFallbackEnabled,
+    MYTT_BASE_URL,
+    upstreamEnabled
+} from "./upstreamConfig.js";
+import {
+    UpstreamDisabledError,
+    UpstreamError,
+    UpstreamRateLimitError
+} from "./upstreamErrors.js";
+import { fetchWithFallback } from "./sources/fetchWithFallback.js";
+import { fetchHtmlPage } from "./sources/html/fetchPage.js";
+import { getRouteDataFromPage } from "./sources/html/pageRoute.js";
+import {
+    extractPromotionStatesFromTableHtml,
+    parseLeagueTableFromHtmlTable,
+    type PromotionState
+} from "./sources/html/leagueTable.js";
+import {
+    getRouteDataFromHtml,
+    RemixContextParseError
+} from "./sources/html/remixContext.js";
 
 function getMyttHeaders(params?: {
     extraHeaders?: Record<string, string>;
@@ -132,32 +146,12 @@ function asNullableNumber(value: unknown): number | null {
     return null;
 }
 
-export class UpstreamRateLimitError extends Error {
-    constructor() {
-        super("myTischtennis rate limit reached");
-        this.name = "UpstreamRateLimitError";
-    }
-}
+export { LocalRateLimitError, UpstreamDisabledError, UpstreamError, UpstreamRateLimitError };
 
-export class UpstreamDisabledError extends Error {
-    constructor() {
-        super("myTischtennis upstream disabled");
-        this.name = "UpstreamDisabledError";
-    }
-}
-
-export class UpstreamError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "UpstreamError";
-    }
-}
-
-export { LocalRateLimitError };
-
-async function postFormToMytt<T>(params: {
+type JsonRequestParams<T> = {
     path: string;
-    body: URLSearchParams;
+    searchParams?: URLSearchParams;
+    body?: URLSearchParams;
     schema: {
         parse: (value: unknown) => T;
     };
@@ -166,7 +160,12 @@ async function postFormToMytt<T>(params: {
     requiredScope?: MyttScope;
     countTowardsLocalRateLimit?: boolean;
     extraHeaders?: Record<string, string>;
-}): Promise<T> {
+};
+
+async function requestJsonFromMytt<T>(
+    method: "GET" | "POST",
+    params: JsonRequestParams<T>
+): Promise<T> {
     if (!upstreamEnabled) {
         throw new UpstreamDisabledError();
     }
@@ -182,60 +181,38 @@ async function postFormToMytt<T>(params: {
         });
     }
 
-    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
+    const url = new URL(`${MYTT_BASE_URL}${params.path}`);
 
-    if (countTowardsLocalRateLimit) {
-        try {
-            assertCanCallUpstream();
-        } catch (error) {
-            void writeJsonLog("mytt_upstream_blocked", {
-                requestId: context?.requestId,
-                clientIp: context?.ip,
-                backendMethod: context?.method,
-                backendUrl: context?.url,
-                reason: "local_rate_limit",
-                myttMethod: "POST",
-                myttPath: params.path
-            });
+    params.searchParams?.forEach((value, key) => {
+        url.searchParams.set(key, value);
+    });
 
-            throw error;
-        }
-    }
-
-    const url = `${MYTT_BASE_URL}${params.path}`;
     const startedAt = Date.now();
 
     try {
-        const response = await fetch(url, {
-            method: "POST",
+        const { response, bodyText } = await fetchUpstreamText({
+            method,
+            url,
+            path: params.path,
+            body: params.body,
+            countTowardsLocalRateLimit: params.countTowardsLocalRateLimit,
+            timeoutMs: API_TIMEOUT_MS(),
             headers: getMyttHeaders({
                 authenticated: params.authenticated,
                 sessionCookie: resolvedSession?.cookie,
                 extraHeaders: {
-                    "content-type": "application/x-www-form-urlencoded",
+                    ...(method === "POST"
+                        ? { "content-type": "application/x-www-form-urlencoded" }
+                        : {}),
                     ...params.extraHeaders
                 }
             }),
-            body: params.body
+            logExtra: {
+                requesterUserId: resolvedSession?.requesterUserId,
+                sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
+                sessionMode: resolvedSession?.mode
+            }
         });
-
-        void writeJsonLog("mytt_upstream_request", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            myttMethod: "POST",
-            myttPath: params.path,
-            status: response.status,
-            ok: response.ok,
-            durationMs: Date.now() - startedAt,
-            localRateLimitCounted: countTowardsLocalRateLimit,
-            requesterUserId: resolvedSession?.requesterUserId,
-            sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
-            sessionMode: resolvedSession?.mode
-        });
-
-        const bodyText = await response.text();
 
         if (
             params.authenticated &&
@@ -275,8 +252,9 @@ async function postFormToMytt<T>(params: {
             clientIp: context?.ip,
             backendMethod: context?.method,
             backendUrl: context?.url,
-            myttMethod: "POST",
+            myttMethod: method,
             myttPath: params.path,
+            myttUrl: url.toString(),
             durationMs: Date.now() - startedAt,
             errorName: error instanceof Error ? error.name : "UnknownError",
             errorMessage: error instanceof Error ? error.message : "Unknown error"
@@ -286,260 +264,48 @@ async function postFormToMytt<T>(params: {
     }
 }
 
-async function getJsonFromMytt<T>(params: {
+function postFormToMytt<T>(params: JsonRequestParams<T>): Promise<T> {
+    return requestJsonFromMytt("POST", params);
+}
+
+function getJsonFromMytt<T>(params: JsonRequestParams<T>): Promise<T> {
+    return requestJsonFromMytt("GET", params);
+}
+
+/**
+ * Seiten, die `?_data=routes/...` kennen: JSON API zuerst, bei einem Fehler genau dieses Pfades
+ * dieselben Loader Daten aus der normalen Webseite lesen.
+ */
+async function getRouteDataWithHtmlFallback<T>(params: {
+    name: string;
     path: string;
-    searchParams?: URLSearchParams;
+    searchParams: URLSearchParams;
     schema: {
         parse: (value: unknown) => T;
     };
-    authenticated?: boolean;
-    requestingUserId?: string;
-    requiredScope?: MyttScope;
-    countTowardsLocalRateLimit?: boolean;
     extraHeaders?: Record<string, string>;
 }): Promise<T> {
-    if (!upstreamEnabled) {
-        throw new UpstreamDisabledError();
-    }
+    const routeId = params.searchParams.get("_data") ?? "";
 
-    const context = getRequestContext();
-
-    let resolvedSession: ResolvedMyttSession | null = null;
-
-    if (params.authenticated) {
-        resolvedSession = await resolveMyttSessionForRequest({
-            requesterUserId: params.requestingUserId ?? context?.appUserId ?? "",
-            requiredScope: params.requiredScope ?? "ttr:read"
-        });
-    }
-
-    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
-
-    if (countTowardsLocalRateLimit) {
-        try {
-            assertCanCallUpstream();
-        } catch (error) {
-            void writeJsonLog("mytt_upstream_blocked", {
-                requestId: context?.requestId,
-                clientIp: context?.ip,
-                backendMethod: context?.method,
-                backendUrl: context?.url,
-                reason: "local_rate_limit",
-                myttMethod: "GET",
-                myttPath: params.path
-            });
-
-            throw error;
-        }
-    }
-
-    const url = new URL(`${MYTT_BASE_URL}${params.path}`);
-
-    if (params.searchParams) {
-        params.searchParams.forEach((value, key) => {
-            url.searchParams.set(key, value);
-        });
-    }
-
-    const urlString = url.toString();
-    const startedAt = Date.now();
-
-    try {
-        const response = await fetch(url, {
-            method: "GET",
-            headers: getMyttHeaders({
-                authenticated: params.authenticated,
-                sessionCookie: resolvedSession?.cookie,
+    return fetchWithFallback({
+        name: params.name,
+        primary: () =>
+            getJsonFromMytt({
+                path: params.path,
+                searchParams: params.searchParams,
+                schema: params.schema,
                 extraHeaders: params.extraHeaders
-            })
-        });
-
-        void writeJsonLog("mytt_upstream_request", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            myttMethod: "GET",
-            myttPath: params.path,
-            myttUrl: urlString,
-            status: response.status,
-            ok: response.ok,
-            durationMs: Date.now() - startedAt,
-            localRateLimitCounted: countTowardsLocalRateLimit,
-            requesterUserId: resolvedSession?.requesterUserId,
-            sessionOwnerUserId: resolvedSession?.sessionOwnerUserId,
-            sessionMode: resolvedSession?.mode
-        });
-
-        const bodyText = await response.text();
-
-        if (
-            params.authenticated &&
-            resolvedSession &&
-            responseLooksLikeAuthExpired(response, bodyText)
-        ) {
-            await markMyttSessionExpired(resolvedSession.sessionOwnerUserId);
-
-            throw new MyttSessionExpiredError({
-                sessionOwnerUserId: resolvedSession.sessionOwnerUserId,
-                delegated: resolvedSession.mode === "delegated"
-            });
-        }
-
-        if (response.status === 429) {
-            throw new UpstreamRateLimitError();
-        }
-
-        if (!response.ok) {
-            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
-        }
-
-        let json: unknown;
-
-        try {
-            json = JSON.parse(bodyText);
-        } catch {
-            throw new UpstreamError(
-                `Upstream returned non-JSON response for ${params.path}`
-            );
-        }
-
-        return params.schema.parse(json);
-    } catch (error) {
-        void writeJsonLog("mytt_upstream_error", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            myttMethod: "GET",
-            myttPath: params.path,
-            myttUrl: urlString,
-            durationMs: Date.now() - startedAt,
-            errorName: error instanceof Error ? error.name : "UnknownError",
-            errorMessage: error instanceof Error ? error.message : "Unknown error"
-        });
-
-        throw error;
-    }
-}
-
-async function getTextFromMytt(params: {
-    path: string;
-    searchParams?: URLSearchParams;
-    countTowardsLocalRateLimit?: boolean;
-}): Promise<string> {
-    if (!upstreamEnabled) {
-        throw new UpstreamDisabledError();
-    }
-
-    const context = getRequestContext();
-
-    const countTowardsLocalRateLimit = shouldCountTowardsLocalRateLimit(params);
-
-    if (countTowardsLocalRateLimit) {
-        try {
-            assertCanCallUpstream();
-        } catch (error) {
-            void writeJsonLog("mytt_upstream_blocked", {
-                requestId: context?.requestId,
-                clientIp: context?.ip,
-                backendMethod: context?.method,
-                backendUrl: context?.url,
-                reason: "local_rate_limit",
-                myttMethod: "GET",
-                myttPath: params.path
+            }),
+        fallback: async () => {
+            const { routeData } = await getRouteDataFromPage({
+                path: params.path,
+                searchParams: params.searchParams,
+                routeId
             });
 
-            throw error;
+            return params.schema.parse(routeData);
         }
-    }
-
-    const url = new URL(`${MYTT_BASE_URL}${params.path}`);
-
-    if (params.searchParams) {
-        params.searchParams.forEach((value, key) => {
-            url.searchParams.set(key, value);
-        });
-    }
-
-    const urlString = url.toString();
-    const startedAt = Date.now();
-
-    try {
-        const response = await fetch(url, {
-            method: "GET",
-            headers: {
-                accept: "text/html,application/xhtml+xml,*/*",
-                "user-agent": "Mozilla/5.0 (compatible; TischtennisTracker/1.0)"
-            }
-        });
-
-        void writeJsonLog("mytt_upstream_request", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            myttMethod: "GET",
-            myttPath: params.path,
-            myttUrl: urlString,
-            status: response.status,
-            ok: response.ok,
-            durationMs: Date.now() - startedAt,
-            localRateLimitCounted: countTowardsLocalRateLimit
-        });
-
-        if (response.status === 429) {
-            throw new UpstreamRateLimitError();
-        }
-
-        if (!response.ok) {
-            throw new UpstreamError(`Upstream returned HTTP ${response.status}`);
-        }
-
-        return response.text();
-    } catch (error) {
-        void writeJsonLog("mytt_upstream_error", {
-            requestId: context?.requestId,
-            clientIp: context?.ip,
-            backendMethod: context?.method,
-            backendUrl: context?.url,
-            myttMethod: "GET",
-            myttPath: params.path,
-            myttUrl: urlString,
-            durationMs: Date.now() - startedAt,
-            errorName: error instanceof Error ? error.name : "UnknownError",
-            errorMessage: error instanceof Error ? error.message : "Unknown error"
-        });
-
-        throw error;
-    }
-}
-
-type PromotionState = "promotion" | "relegation" | "none";
-
-function extractPromotionStatesFromTableHtml(html: string): PromotionState[] {
-    const rows = html.match(/<tr\b[\s\S]*?<\/tr>/gi) ?? [];
-
-    return rows
-        .filter((row) => {
-            const text = row
-                .replace(/<[^>]+>/g, " ")
-                .replace(/\s+/g, " ")
-                .trim();
-
-            return text.length > 0 && !/^rang\s+mannschaft/i.test(text);
-        })
-        .map((row): PromotionState => {
-            if (/#rise(?:["'#\s>]|$)/i.test(row)) {
-                return "promotion";
-            }
-
-            if (/#fall(?:["'#\s>]|$)/i.test(row)) {
-                return "relegation";
-            }
-
-            return "none";
-        });
+    });
 }
 
 export async function searchPlayers(params: {
@@ -738,7 +504,8 @@ async function fetchAndroRankingRaw(params: {
 
     const sourcePath = `/rankings/andro-rangliste?${searchParams.toString()}`;
 
-    const raw = await getJsonFromMytt({
+    const raw = await getRouteDataWithHtmlFallback({
+        name: "andro_ranking",
         path: "/rankings/andro-rangliste",
         searchParams,
         schema: {
@@ -1119,7 +886,8 @@ export async function getClubSchedule(params: {
         searchParams.set("date_end", params.dateEnd);
     }
 
-    return getJsonFromMytt({
+    return getRouteDataWithHtmlFallback({
+        name: "club_schedule",
         path: buildClubContextPath({
             association: params.organization,
             season: params.season,
@@ -1151,6 +919,71 @@ function normalizeFrontendLeagueTableResponse(value: unknown): LeagueTableRespon
     });
 }
 
+const LEAGUE_TABLE_ROUTE_ID =
+    "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/tabelle.$filter";
+
+function applyPromotionStates(
+    table: LeagueTableResponse,
+    promotionStates: PromotionState[]
+): LeagueTableResponse {
+    return {
+        ...table,
+        data: table.data.map((row, index) => ({
+            ...row,
+            promotion_state: promotionStates[index] ?? "none"
+        }))
+    };
+}
+
+// Ein einziger Seitenabruf liefert Tabelle (Loader Daten) und Auf/Abstiegs Symbole.
+async function getLeagueTableFromPage(path: string): Promise<LeagueTableResponse> {
+    const html = await fetchHtmlPage({ path });
+
+    try {
+        const table = normalizeFrontendLeagueTableResponse(
+            getRouteDataFromHtml(html, LEAGUE_TABLE_ROUTE_ID)
+        );
+
+        return applyPromotionStates(table, extractPromotionStatesFromTableHtml(html));
+    } catch (error) {
+        if (!(error instanceof RemixContextParseError) && !(error instanceof ZodError)) {
+            throw error;
+        }
+
+        // Keine brauchbaren Loader Daten (z.B. Framework Update): sichtbare Tabelle lesen.
+        try {
+            return parseLeagueTableFromHtmlTable(html);
+        } catch {
+            throw error;
+        }
+    }
+}
+
+async function getLeagueTableFromApi(
+    path: string,
+    searchParams: URLSearchParams
+): Promise<LeagueTableResponse> {
+    const table = await getJsonFromMytt({
+        path,
+        searchParams,
+        schema: {
+            parse: normalizeFrontendLeagueTableResponse
+        }
+    });
+
+    // Ohne Seite gibt es keine Auf/Abstiegs Symbole, die Tendenz der API entspricht ihnen.
+    return applyPromotionStates(
+        table,
+        table.data.map((row): PromotionState => {
+            if (row.tendency === "rise") {
+                return "promotion";
+            }
+
+            return row.tendency === "fall" ? "relegation" : "none";
+        })
+    );
+}
+
 export async function getLeagueTable(params: {
     association: string;
     season: string;
@@ -1170,38 +1003,19 @@ export async function getLeagueTable(params: {
     )}`;
 
     const searchParams = new URLSearchParams({
-        _data:
-            "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/tabelle.$filter"
+        _data: LEAGUE_TABLE_ROUTE_ID
     });
 
-    const jsonResult = await getJsonFromMytt({
-        path,
-        searchParams,
-        schema: {
-            parse: normalizeFrontendLeagueTableResponse
-        }
-    });
-
-    let promotionStates: PromotionState[] = [];
-
-    try {
-        const html = await getTextFromMytt({
-            path,
-            countTowardsLocalRateLimit: true
-        });
-
-        promotionStates = extractPromotionStatesFromTableHtml(html);
-    } catch {
-        promotionStates = [];
+    if (!htmlFallbackEnabled) {
+        return getLeagueTableFromApi(path, searchParams);
     }
 
-    return {
-        ...jsonResult,
-        data: jsonResult.data.map((row, index) => ({
-            ...row,
-            promotion_state: promotionStates[index] ?? "none"
-        }))
-    };
+    return fetchWithFallback({
+        name: "league_table",
+        primarySource: "html",
+        primary: () => getLeagueTableFromPage(path),
+        fallback: () => getLeagueTableFromApi(path, searchParams)
+    });
 }
 
 function toLeagueSlug(value: string | undefined): string {
@@ -1237,7 +1051,8 @@ export async function getLeagueSchedule(params: {
             "routes/click-tt+/$association+/$season+/$type+/$groupname.gruppe.$urlid+/spielplan.$filter"
     });
 
-    return getJsonFromMytt({
+    return getRouteDataWithHtmlFallback({
+        name: "league_schedule",
         path: `/click-tt/${encodeURIComponent(
             params.association
         )}/${encodeURIComponent(params.season)}/ligen/${encodeURIComponent(
@@ -1401,7 +1216,8 @@ export async function getTeamInfos(params: {
             "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/infos"
     });
 
-    return getJsonFromMytt({
+    return getRouteDataWithHtmlFallback({
+        name: "team_infos",
         path: buildTeamContextPath({
             ...params,
             page: "infos"
@@ -1427,7 +1243,8 @@ export async function getTeamSchedule(params: {
             "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielplan.$filter"
     });
 
-    return getJsonFromMytt({
+    return getRouteDataWithHtmlFallback({
+        name: "team_schedule",
         path: buildTeamContextPath({
             ...params,
             page: "spielplan",
@@ -1454,7 +1271,8 @@ export async function getTeamBalances(params: {
             "routes/click-tt+/$association+/$season+/$type+/($groupname).gruppe.$urlid_.mannschaft.$teamid.$teamname+/spielerbilanzen.$filter"
     });
 
-    return getJsonFromMytt({
+    return getRouteDataWithHtmlFallback({
+        name: "team_balances",
         path: buildTeamContextPath({
             ...params,
             page: "spielerbilanzen",

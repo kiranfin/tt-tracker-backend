@@ -1,12 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
+import { readThrough } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
 import { searchPlayers, searchClubs } from "../myttClient.js";
-import type {
-    ClubSearchResponse,
-    PlayerSearchResponse
-} from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 function parseSearchParams(query: {
     q?: string;
@@ -50,32 +47,21 @@ export async function searchRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `players:${q.toLowerCase()}:${page}:${pagesize}`;
-        const cached = getFromCache<PlayerSearchResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await searchPlayers({
-                query: q,
-                page,
-                pagesize
+            const result = await readThrough({
+                key: `players:${q.toLowerCase()}:${page}:${pagesize}`,
+                ttlMs: CACHE_TTL.PLAYER_SEARCH,
+                load: () =>
+                    searchPlayers({
+                        query: q,
+                        page,
+                        pagesize
+                    })
             });
 
-            setCache(cacheKey, result, CACHE_TTL.PLAYER_SEARCH);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -101,32 +87,21 @@ export async function searchRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `clubs:${q.toLowerCase()}:${page}:${pagesize}`;
-        const cached = getFromCache<ClubSearchResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await searchClubs({
-                query: q,
-                page,
-                pagesize
+            const result = await readThrough({
+                key: `clubs:${q.toLowerCase()}:${page}:${pagesize}`,
+                ttlMs: CACHE_TTL.CLUB_SEARCH,
+                load: () =>
+                    searchClubs({
+                        query: q,
+                        page,
+                        pagesize
+                    })
             });
 
-            setCache(cacheKey, result, CACHE_TTL.CLUB_SEARCH);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
+import { readThrough, type CacheSource } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
 import { getLeagueSchedule, getLeagueTable } from "../myttClient.js";
 import type {
@@ -7,6 +7,7 @@ import type {
     LeagueTableResponse
 } from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 const MYTT_BASE_URL = "https://www.mytischtennis.de";
 const DEFAULT_SEASON = "25--26";
@@ -17,7 +18,7 @@ const LEAGUE_DISCOVERY_TTL = {
     CLASSES: 60 * 60 * 1000
 };
 
-type CacheSource = "cache" | "upstream" | "static";
+type ResponseSource = CacheSource | "static";
 
 type AssociationReference = {
     id: string;
@@ -358,29 +359,6 @@ async function fetchJsonFromMytt<T>(
     return response.json() as Promise<T>;
 }
 
-async function readThroughCache<T>(
-    cacheKey: string,
-    ttlMs: number,
-    load: () => Promise<T>
-): Promise<{ value: T; source: CacheSource }> {
-    const cached = getFromCache<T>(cacheKey);
-
-    if (cached) {
-        return {
-            value: cached,
-            source: "cache"
-        };
-    }
-
-    const value = await load();
-    setCache(cacheKey, value, ttlMs);
-
-    return {
-        value,
-        source: "upstream"
-    };
-}
-
 function extractRegionLinks(
     html: string,
     association: string,
@@ -682,16 +660,16 @@ async function sendRegionsResponse(
     const season = normalizeSeason(seasonValue);
 
     const cacheKey = `league-regions:${association}:${season}`;
-    const result = await readThroughCache(
-        cacheKey,
-        LEAGUE_DISCOVERY_TTL.REGIONS,
-        () => loadLeagueRegions(association, season)
-    );
+    const result = await readThrough({
+        key: cacheKey,
+        ttlMs: LEAGUE_DISCOVERY_TTL.REGIONS,
+        load: () => loadLeagueRegions(association, season)
+    });
 
     return {
         data: result.value.regions,
         meta: {
-            source: result.source,
+            ...buildMeta(result),
             association,
             season
         }
@@ -733,23 +711,23 @@ async function sendClassesResponse(
     }
 
     const cacheKey = `league-classes:${association}:${season}:${competitionType}:${championship}`;
-    const result = await readThroughCache(
-        cacheKey,
-        LEAGUE_DISCOVERY_TTL.CLASSES,
-        () =>
+    const result = await readThrough({
+        key: cacheKey,
+        ttlMs: LEAGUE_DISCOVERY_TTL.CLASSES,
+        load: () =>
             loadLeagueClasses({
                 association,
                 season,
                 championship,
                 competitionType
             })
-    );
+    });
 
     return {
         data: result.value.classes,
         sections: result.value.sections,
         meta: {
-            source: result.source,
+            ...buildMeta(result),
             association,
             season,
             championship,
@@ -764,7 +742,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         return {
             data: ASSOCIATIONS,
             meta: {
-                source: "static" satisfies CacheSource
+                source: "static" satisfies ResponseSource
             }
         };
     });
@@ -783,7 +761,7 @@ export async function leagueRoutes(app: FastifyInstance) {
             return {
                 data: ASSOCIATIONS,
                 meta: {
-                    source: "static" satisfies CacheSource,
+                    source: "static" satisfies ResponseSource,
                     mode: "associations"
                 }
             };
@@ -912,34 +890,23 @@ export async function leagueRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `league-table:${association}:${season}:${groupId}:${leagueSlug}:${filter}`;
-        const cached = getFromCache<LeagueTableResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await getLeagueTable({
-                association,
-                season,
-                groupId,
-                leagueSlug,
-                filter
+            const result = await readThrough({
+                key: `league-table:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
+                ttlMs: CACHE_TTL.LEAGUE_TABLE,
+                load: () =>
+                    getLeagueTable({
+                        association,
+                        season,
+                        groupId,
+                        leagueSlug,
+                        filter
+                    })
             });
 
-            setCache(cacheKey, result, CACHE_TTL.LEAGUE_TABLE);
-
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -982,34 +949,23 @@ export async function leagueRoutes(app: FastifyInstance) {
                 });
             }
 
-            const cacheKey = `league-schedule:${association}:${season}:${groupId}:${leagueSlug}:${filter}`;
-            const cached = getFromCache<LeagueScheduleResponse>(cacheKey);
-
-            if (cached) {
-                return {
-                    data: cached,
-                    meta: {
-                        source: "cache"
-                    }
-                };
-            }
-
             try {
-                const result = await getLeagueSchedule({
-                    association,
-                    season,
-                    groupId,
-                    leagueSlug,
-                    filter
+                const result = await readThrough({
+                    key: `league-schedule:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
+                    ttlMs: CACHE_TTL.LEAGUE_SCHEDULE,
+                    load: () =>
+                        getLeagueSchedule({
+                            association,
+                            season,
+                            groupId,
+                            leagueSlug,
+                            filter
+                        })
                 });
 
-                setCache(cacheKey, result, CACHE_TTL.LEAGUE_SCHEDULE);
-
                 return {
-                    data: result,
-                    meta: {
-                        source: "upstream"
-                    }
+                    data: result.value,
+                    meta: buildMeta(result)
                 };
             } catch (error) {
                 request.log.error(error);

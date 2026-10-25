@@ -10,6 +10,7 @@ import { playerRoutes } from "./routes/playerRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { getRateLimitStatus } from "./rateLimiter.js";
+import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache.js";
 import { getUpstreamUsage } from "./upstreamTracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
@@ -18,6 +19,8 @@ import { authRoutes } from "./routes/authRoutes.js";
 import { passwordResetRoutes } from "./routes/passwordResetRoutes.js";
 import { attachOptionalAppUser } from "./authRequest.js";
 import { getRequestContext } from "./requestContext.js";
+
+await initCachePersistence();
 
 const app = Fastify({
     logger: true,
@@ -130,6 +133,7 @@ app.addHook("preHandler", async (request, reply) => {
 app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
+        cache: getCacheStatus(),
         upstream: getUpstreamUsage()
     };
 });
@@ -158,6 +162,16 @@ try {
     });
 
     app.log.info(`Server läuft auf http://${host}:${port}`);
+
+    // Cache vor dem Beenden sichern, damit ein Neustart nicht mit leerem Cache beginnt.
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+        process.once(signal, () => {
+            void app
+                .close()
+                .then(() => flushCacheToDisk())
+                .finally(() => process.exit(0));
+        });
+    }
 } catch (error) {
     app.log.error(error);
     process.exit(1);

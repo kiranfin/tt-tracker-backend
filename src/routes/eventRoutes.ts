@@ -1,9 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { getFromCache, setCache } from "../cache.js";
+import { readThrough } from "../cache.js";
 import { CACHE_TTL } from "../constants.js";
 import { fetchEventsList, fetchEventDetail } from "../dancingParkClient.js";
-import type { EventDetail, EventListResponse } from "../schemas.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 // Event ids are GUIDs. Validate before it ever reaches the upstream URL so a
 // client can never inject an arbitrary path (SSRF guard).
@@ -12,28 +12,16 @@ const GUID_REGEX =
 
 export async function eventRoutes(app: FastifyInstance) {
     app.get("/api/events", async (request, reply) => {
-        const cacheKey = "events:list";
-        const cached = getFromCache<EventListResponse>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await fetchEventsList();
-
-            setCache(cacheKey, result, CACHE_TTL.EVENTS_LIST);
+            const result = await readThrough({
+                key: "events:list",
+                ttlMs: CACHE_TTL.EVENTS_LIST,
+                load: () => fetchEventsList()
+            });
 
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
@@ -53,28 +41,16 @@ export async function eventRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = `events:detail:${id.toLowerCase()}`;
-        const cached = getFromCache<EventDetail>(cacheKey);
-
-        if (cached) {
-            return {
-                data: cached,
-                meta: {
-                    source: "cache"
-                }
-            };
-        }
-
         try {
-            const result = await fetchEventDetail(id);
-
-            setCache(cacheKey, result, CACHE_TTL.EVENTS_DETAIL);
+            const result = await readThrough({
+                key: `events:detail:${id.toLowerCase()}`,
+                ttlMs: CACHE_TTL.EVENTS_DETAIL,
+                load: () => fetchEventDetail(id)
+            });
 
             return {
-                data: result,
-                meta: {
-                    source: "upstream"
-                }
+                data: result.value,
+                meta: buildMeta(result)
             };
         } catch (error) {
             request.log.error(error);
