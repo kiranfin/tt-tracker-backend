@@ -49,6 +49,30 @@ export class CircuitBreaker {
         return Math.max(0, this.openUntil - this.now());
     }
 
+    /** true, wenn myTischtennis selbst gebremst hat (429 oder Kontingent), nicht bei Ausfällen. */
+    isRateLimited() {
+        return this.lastReason === "upstream_429" || this.lastReason === "upstream_quota";
+    }
+
+    /**
+     * Pausiert bis zum Ende des Kontingent Fensters, ohne den Backoff zu verändern.
+     * Eine bereits längere Pause bleibt bestehen.
+     */
+    pauseFor(reason: string, pauseMs: number) {
+        const until = this.now() + Math.min(pauseMs, this.options.maxBackoffMs);
+
+        if (until <= this.openUntil) {
+            return;
+        }
+
+        this.openUntil = until;
+        this.lastReason = reason;
+        this.lastOpenedAt = this.now();
+        this.timesOpened += 1;
+
+        this.options.onOpen?.(reason, until - this.now());
+    }
+
     report(result: UpstreamResult) {
         if (result.status === 429) {
             this.open("upstream_429", parseRetryAfterMs(result.retryAfterHeader, this.now()));

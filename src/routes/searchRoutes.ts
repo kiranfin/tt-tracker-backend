@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import { searchPlayers, searchClubs } from "../mytt/index.js";
+import { searchKnownClubs, searchKnownPlayers } from "../sources/knownSearch.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -27,6 +28,14 @@ function parseSearchParams(query: {
         pagesize: safePagesize
     };
 }
+
+// Antwort aus der Notfall Suche (nur bereits bekannte Spieler oder Vereine).
+const KNOWN_RESULTS_META = {
+    source: "stale",
+    origin: "upstream",
+    fetchedAt: null,
+    fallback: "known_results"
+} as const;
 
 export async function searchRoutes(app: FastifyInstance) {
     app.get("/api/search/players", async (request, reply) => {
@@ -65,6 +74,13 @@ export async function searchRoutes(app: FastifyInstance) {
             };
         } catch (error) {
             request.log.error(error);
+
+            const known = searchKnownPlayers({ query: q, page, pagesize });
+
+            if (known.results.length > 0) {
+                return { data: known, meta: KNOWN_RESULTS_META };
+            }
+
             return handleApiError(error, reply);
         }
     });
@@ -105,6 +121,13 @@ export async function searchRoutes(app: FastifyInstance) {
             };
         } catch (error) {
             request.log.error(error);
+
+            const known = searchKnownClubs({ query: q, page, pagesize });
+
+            if (known.results.length > 0) {
+                return { data: known, meta: KNOWN_RESULTS_META };
+            }
+
             return handleApiError(error, reply);
         }
     });

@@ -2,18 +2,23 @@ import { config } from "../config.js";
 import { markLoadOrigin } from "../cache/index.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
-import { UpstreamError, UpstreamFormatError } from "../upstream/errors.js";
+import { LocalRateLimitError, UpstreamError, UpstreamFormatError } from "../upstream/errors.js";
 import { trackSourceResult, type SourceKind } from "../upstream/tracker.js";
 import { RemixContextParseError } from "./html/remixContext.js";
 
 // Nur Fehler, bei denen der andere Weg etwas bringen kann. Nicht dazu gehören:
-// - Session Fehler, abgeschaltetes Upstream und lokale Limits (Breaker, Stundenlimit): dieselbe Quelle gäbe dasselbe Ergebnis.
+// - Session Fehler, abgeschaltetes Upstream und lokale Limits (Stundenlimit, Breaker nach 429): dieselbe Quelle gäbe dasselbe Ergebnis.
+//   Ausnahme: Breaker wegen Ausfall. Der gilt nur für eine Lane (API oder Webseite), der andere Weg kann gehen.
 // - 4xx (z.B. 404): die Seite gäbe dieselbe Antwort, der Fallback würde nur Requests verdoppeln.
 // - 429: der Breaker ist danach ohnehin offen.
 // - Formatfehler, außer der Aufrufer hat einen unabhängigen zweiten Parser (fallbackOnFormatError).
 function canFallBack(error: unknown, fallbackOnFormatError: boolean) {
     if (error instanceof UpstreamError) {
         return error.status === undefined || error.status >= 500;
+    }
+
+    if (error instanceof LocalRateLimitError) {
+        return error.reason === "upstream_unavailable";
     }
 
     if (error instanceof UpstreamFormatError || error instanceof RemixContextParseError) {

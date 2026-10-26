@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
 import { UpstreamDisabledError, UpstreamError } from "./errors.js";
-import { acquireUpstreamSlot, reportUpstreamResult } from "./rateLimiter.js";
+import { acquireUpstreamSlot, getUpstreamLane, reportUpstreamResult } from "./rateLimiter.js";
 import { trackUpstreamRequest } from "./tracker.js";
 
 export type UpstreamRequest = {
@@ -92,10 +92,11 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
     };
 
     const counted = isCounted(request);
+    const lane = getUpstreamLane(request.path);
     let release: () => void;
 
     try {
-        release = await acquireUpstreamSlot({ counted });
+        release = await acquireUpstreamSlot({ lane, counted });
     } catch (error) {
         void writeJsonLog("mytt_upstream_blocked", {
             ...logBase,
@@ -137,8 +138,10 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         });
 
         reportUpstreamResult({
+            lane,
             status: response.status,
-            retryAfterHeader: response.headers.get("retry-after")
+            retryAfterHeader: response.headers.get("retry-after"),
+            rateLimitHeader: response.headers.get("ratelimit")
         });
 
         const bodyText =
@@ -152,7 +155,7 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
             // Header kamen an, der Body nicht rechtzeitig: gleiche Behandlung wie ein Timeout vor der Antwort.
             // Alles andere (z.B. "too large") ist schon ein UpstreamError und bleibt unverändert.
             if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-                reportUpstreamResult({ networkError: true });
+                reportUpstreamResult({ lane, networkError: true });
 
                 throw toUpstreamError(error, request.timeoutMs);
             }
@@ -161,7 +164,7 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         }
 
         // Keine Response (Timeout, DNS, Verbindungsabbruch): zählt für den Breaker wie ein 5xx.
-        reportUpstreamResult({ networkError: true });
+        reportUpstreamResult({ lane, networkError: true });
 
         trackUpstreamRequest({
             method: request.method,

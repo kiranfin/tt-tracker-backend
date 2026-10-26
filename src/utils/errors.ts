@@ -15,6 +15,9 @@ import {
 import { InvalidTokenError } from "../authToken.js";
 import { UserNotFoundError } from "../authStore.js";
 
+const UPSTREAM_UNAVAILABLE_MESSAGE =
+    "myTischtennis hat gerade eine Störung und liefert diese Daten nicht. Bitte später erneut versuchen.";
+
 export function handleApiError(error: unknown, reply: FastifyReply) {
     // Vor ZodError: ein geändertes Format bei myTischtennis ist kein Fehler des Clients.
     if (error instanceof UpstreamFormatError) {
@@ -97,6 +100,20 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
         });
     }
 
+    if (error instanceof LocalRateLimitError && error.reason === "upstream_unavailable") {
+        const retryAfterSeconds = Math.ceil(error.retryAfterMs / 1000);
+
+        reply.header("Retry-After", String(retryAfterSeconds));
+
+        return reply.code(503).send({
+            error: {
+                code: "UPSTREAM_UNAVAILABLE",
+                message: UPSTREAM_UNAVAILABLE_MESSAGE,
+                retryAfterSeconds
+            }
+        });
+    }
+
     if (error instanceof LocalRateLimitError) {
         const retryAfterSeconds = Math.ceil(error.retryAfterMs / 1000);
         const retryAfterMinutes = Math.ceil(retryAfterSeconds / 60);
@@ -138,6 +155,17 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
             error: {
                 code: "UPSTREAM_DISABLED",
                 message: "Externe Datenquelle ist aktuell deaktiviert."
+            }
+        });
+    }
+
+    // Timeout, Netzwerk oder Störung bei myTischtennis (5xx, Datenbank weg).
+    if (error instanceof UpstreamError && (error.status === undefined || error.status >= 500)) {
+        return reply.code(503).send({
+            error: {
+                code: "UPSTREAM_UNAVAILABLE",
+                message: UPSTREAM_UNAVAILABLE_MESSAGE,
+                details: error.message
             }
         });
     }

@@ -17,6 +17,7 @@ import {
 } from "../upstream/errors.js";
 import { fetchUpstreamText } from "../upstream/fetch.js";
 import { parseUpstream } from "../upstream/parse.js";
+import { asRecord } from "./values.js";
 
 type Schema<T> = {
     parse: (value: unknown) => T;
@@ -75,6 +76,48 @@ function responseLooksLikeAuthExpired(response: Response, bodyText: string) {
             lower.includes("einloggen") ||
             lower.includes("anmelden"))
     );
+}
+
+// PostgREST Fehler, wenn die Datenbank hinter myTischtennis nicht erreichbar ist
+// (PGRST000 bis PGRST003, z.B. "Could not query the database for the schema cache").
+const DATABASE_OUTAGE_CODE = /^PGRST00[0-3]$/;
+
+// Fehlertexte, wenn myTischtennis intern seine Datenbank nicht erreicht,
+// z.B. "FetchError: request to http://10.0.0.11:8000/rest/v1/rpc/search_players failed, reason: connect ECONNREFUSED".
+const OUTAGE_MESSAGE = /database|schema cache|FetchError|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up/i;
+
+/**
+ * Erkennt Störungen bei myTischtennis selbst. Die kommen nicht immer als 5xx, sondern auch als
+ * 200 mit `error` Objekt oder als 400 mit Fehlertext. Ohne das würde eine Störung als gültige
+ * leere Antwort gecacht oder als Client Fehler (4xx) ohne Fallback behandelt.
+ */
+export function detectUpstreamOutage(response: Response, bodyText: string): string | null {
+    if (response.headers.has("x-remix-error")) {
+        return "server error in page loader";
+    }
+
+    let body: unknown;
+
+    try {
+        body = JSON.parse(bodyText);
+    } catch {
+        return null;
+    }
+
+    const error = asRecord(body).error;
+
+    if (typeof error === "string") {
+        return OUTAGE_MESSAGE.test(error) ? error : null;
+    }
+
+    const { code, message } = asRecord(error);
+    const text = typeof message === "string" ? message : "";
+
+    if ((typeof code === "string" && DATABASE_OUTAGE_CODE.test(code)) || OUTAGE_MESSAGE.test(text)) {
+        return `${typeof code === "string" && code ? `${code} ` : ""}${text}`.trim();
+    }
+
+    return null;
 }
 
 function parseJsonBody(bodyText: string, path: string): unknown {
@@ -143,6 +186,13 @@ async function requestJson<T>(
 
         if (response.status === 429) {
             throw new UpstreamRateLimitError();
+        }
+
+        const outage = detectUpstreamOutage(response, bodyText);
+
+        if (outage) {
+            // Wie ein 503: HTML Fallback und stale Cache greifen, nichts Kaputtes wird gecacht.
+            throw new UpstreamError(`myTischtennis outage: ${outage}`, 503);
         }
 
         if (!response.ok) {

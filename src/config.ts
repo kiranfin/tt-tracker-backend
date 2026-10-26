@@ -43,7 +43,8 @@ export const config = {
     upstream: {
         enabled: process.env.MYTT_UPSTREAM_ENABLED !== "false",
         baseUrl: process.env.MYTT_BASE_URL ?? "https://www.mytischtennis.de",
-        requestTimeoutMs: readNumber("MYTT_REQUEST_TIMEOUT_MS", 15 * SECOND_MS, 1),
+        // Hängt die Datenbank von myTischtennis, kommt nach dieser Zeit der Cache statt einer Antwort.
+        requestTimeoutMs: readNumber("MYTT_REQUEST_TIMEOUT_MS", 8 * SECOND_MS, 1),
         htmlFallbackEnabled: readBoolean("MYTT_HTML_FALLBACK_ENABLED", true),
         // Nur Entwicklung: lässt die JSON API absichtlich scheitern, um den HTML Fallback zu testen.
         forceApiFailure:
@@ -67,6 +68,10 @@ export const config = {
 
     // 0 schaltet die Notbremse ab.
     maxRequestsPerHour: readNumber("MYTT_MAX_REQUESTS_PER_HOUR", 1000),
+
+    // myTischtennis meldet sein Kontingent im `ratelimit` Header (aktuell 360 pro 30 Minuten).
+    // Bleiben nur noch so viele übrig, pausieren wir bis zum Reset, statt in einen 429 zu laufen.
+    quotaReserve: Math.floor(readNumber("MYTT_QUOTA_RESERVE", 10)),
 
     breaker: {
         baseBackoffMs: MINUTE_MS,

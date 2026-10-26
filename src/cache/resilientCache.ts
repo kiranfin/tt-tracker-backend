@@ -133,6 +133,13 @@ export class ResilientCache {
         return this.unsavedChanges;
     }
 
+    /** Alle Werte, die noch als Notnagel taugen (frisch oder stale), z.B. für eine lokale Suche. */
+    usableValues(): unknown[] {
+        return [...this.entries.values()]
+            .filter((entry) => this.isUsableStale(entry))
+            .map((entry) => entry.value);
+    }
+
     snapshot(): Array<[string, CacheEntry]> {
         return [...this.entries.entries()];
     }

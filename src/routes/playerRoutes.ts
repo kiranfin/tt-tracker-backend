@@ -1,14 +1,91 @@
 import type { FastifyInstance } from "fastify";
 import { getRequiredAppUserId } from "../appUser.js";
+import { readThrough, type ReadThroughResult } from "../cache/index.js";
+import { CACHE_TTL } from "../constants.js";
 import {
     getPlayerHeadToHead,
     getPlayerTtr,
     getPlayerTtrHistory
 } from "../mytt/index.js";
+import { resolveMyttSessionForRequest, type MyttScope } from "../myttSessionStore.js";
 import { handleApiError } from "../utils/errors.js";
+import { buildMeta } from "../utils/responseMeta.js";
 
 function normalizeNuid(nuid: string) {
     return nuid.trim().toUpperCase();
+}
+
+/** Antwort mit `error` Feld: wird nicht gecacht, ein älterer guter Cache Eintrag hat Vorrang. */
+class ErrorPayload<T> extends Error {
+    constructor(readonly value: T) {
+        super("myTischtennis returned an error payload");
+        this.name = "ErrorPayload";
+    }
+}
+
+/**
+ * TTR Daten über den Cache, damit bei einer Störung von myTischtennis der letzte Stand kommt.
+ * Der Zugriff (eigene oder freigegebene myTT Session) wird vor dem Cache geprüft, damit ein
+ * Treffer nichts an User ohne Berechtigung ausliefert.
+ */
+async function readTtrData<T extends { error?: unknown }>(params: {
+    requestingUserId: string;
+    scope: MyttScope;
+    key: string;
+    ttlMs: number;
+    load: () => Promise<T>;
+}): Promise<ReadThroughResult<T>> {
+    await resolveMyttSessionForRequest({
+        requesterUserId: params.requestingUserId,
+        requiredScope: params.scope
+    });
+
+    try {
+        return await readThrough({
+            key: params.key,
+            ttlMs: params.ttlMs,
+            load: async () => {
+                const value = await params.load();
+
+                if (value.error !== null && value.error !== undefined) {
+                    throw new ErrorPayload(value);
+                }
+
+                return value;
+            }
+        });
+    } catch (error) {
+        if (error instanceof ErrorPayload) {
+            return {
+                value: error.value as T,
+                source: "upstream",
+                origin: "upstream",
+                fetchedAt: new Date().toISOString()
+            };
+        }
+
+        throw error;
+    }
+}
+
+function readPlayerTtr(requestingUserId: string, nuid: string) {
+    return readTtrData({
+        requestingUserId,
+        scope: "ttr:read",
+        key: `player-ttr:${nuid}`,
+        ttlMs: CACHE_TTL.PLAYER_TTR,
+        load: () => getPlayerTtr({ requestingUserId, nuid })
+    });
+}
+
+function readPlayerTtrHistory(requestingUserId: string, nuid: string) {
+    return readTtrData({
+        requestingUserId,
+        scope: "ttr_history:read",
+        key: `player-ttr-history:${nuid}`,
+        ttlMs: CACHE_TTL.PLAYER_TTR_HISTORY,
+        load: () => getPlayerTtrHistory({ requestingUserId, nuid })
+    });
 }
 
 function toHeadToHeadOtherUser(nuid: string) {
@@ -649,10 +726,8 @@ export async function playerRoutes(app: FastifyInstance) {
                 });
             }
 
-            const result = await getPlayerTtr({
-                requestingUserId,
-                nuid
-            });
+            const cached = await readPlayerTtr(requestingUserId, nuid);
+            const result = cached.value;
 
             return {
                 data: {
@@ -661,9 +736,7 @@ export async function playerRoutes(app: FastifyInstance) {
                     ttr: result.ttr ?? null,
                     error: result.error ?? null
                 },
-                meta: {
-                    source: "upstream"
-                }
+                meta: buildMeta(cached)
             };
         } catch (error) {
             request.log.error(error);
@@ -687,10 +760,8 @@ export async function playerRoutes(app: FastifyInstance) {
                 });
             }
 
-            const result = await getPlayerTtrHistory({
-                requestingUserId,
-                nuid
-            });
+            const cached = await readPlayerTtrHistory(requestingUserId, nuid);
+            const result = cached.value;
 
             return {
                 data: {
@@ -707,9 +778,7 @@ export async function playerRoutes(app: FastifyInstance) {
                     events: result.event ?? [],
                     error: result.error ?? null
                 },
-                meta: {
-                    source: "upstream"
-                }
+                meta: buildMeta(cached)
             };
         } catch (error) {
             request.log.error(error);
@@ -799,29 +868,17 @@ export async function playerRoutes(app: FastifyInstance) {
                 });
             }
 
-            const [
-                leftTtrResult,
-                rightTtrResult,
-                leftHistoryResult,
-                rightHistoryResult
-            ] = await Promise.all([
-                getPlayerTtr({
-                    requestingUserId,
-                    nuid: leftNuid
-                }),
-                getPlayerTtr({
-                    requestingUserId,
-                    nuid: rightNuid
-                }),
-                getPlayerTtrHistory({
-                    requestingUserId,
-                    nuid: leftNuid
-                }),
-                getPlayerTtrHistory({
-                    requestingUserId,
-                    nuid: rightNuid
-                })
+            const [leftTtr, rightTtr, leftHistory, rightHistory] = await Promise.all([
+                readPlayerTtr(requestingUserId, leftNuid),
+                readPlayerTtr(requestingUserId, rightNuid),
+                readPlayerTtrHistory(requestingUserId, leftNuid),
+                readPlayerTtrHistory(requestingUserId, rightNuid)
             ]);
+
+            const leftTtrResult = leftTtr.value;
+            const rightTtrResult = rightTtr.value;
+            const leftHistoryResult = leftHistory.value;
+            const rightHistoryResult = rightHistory.value;
 
             const left = buildPlayerSnapshot({
                 nuid: leftNuid,

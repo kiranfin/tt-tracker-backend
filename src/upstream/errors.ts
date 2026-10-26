@@ -34,7 +34,13 @@ export class UpstreamDisabledError extends Error {
     }
 }
 
-export type LocalRateLimitReason = "hourly_cap" | "queue_full" | "breaker_open";
+// breaker_open: myTischtennis hat gebremst (429 oder Kontingent fast leer).
+// upstream_unavailable: myTischtennis hing oder lieferte 5xx, der Breaker schont es kurz.
+export type LocalRateLimitReason =
+    | "hourly_cap"
+    | "queue_full"
+    | "breaker_open"
+    | "upstream_unavailable";
 
 /** Ein eigenes Limit greift, myTischtennis selbst wurde nicht angefragt. */
 export class LocalRateLimitError extends Error {
@@ -43,7 +49,7 @@ export class LocalRateLimitError extends Error {
         readonly reason: LocalRateLimitReason = "hourly_cap"
     ) {
         super(
-            reason === "breaker_open"
+            reason === "breaker_open" || reason === "upstream_unavailable"
                 ? "myTischtennis is temporarily paused"
                 : "Local upstream request limit reached"
         );

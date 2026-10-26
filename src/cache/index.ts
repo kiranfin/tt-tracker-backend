@@ -29,6 +29,10 @@ export function readThrough<T>(params: {
     return cache.readThrough(params);
 }
 
+export function getCachedValues(): unknown[] {
+    return cache.usableValues();
+}
+
 export function getCacheStatus() {
     return {
         ...cache.status(),
