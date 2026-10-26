@@ -111,6 +111,23 @@ function parseTimestamp(value: string | null) {
     return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function sortEventsOldestFirst(events: unknown[]) {
+    return events
+        .map((event, index) => ({
+            event,
+            index,
+            timestamp: parseTimestamp(firstString(asRecord(event), ["event_date_time"]))
+        }))
+        .sort((left, right) => {
+            if (left.timestamp === null || right.timestamp === null) {
+                return left.index - right.index;
+            }
+
+            return left.timestamp - right.timestamp;
+        })
+        .map((item) => item.event);
+}
+
 function getNumberDifference(left: number | null, right: number | null) {
     if (left === null || right === null) {
         return null;
@@ -198,7 +215,9 @@ function normalizeHistoryPoints(events: unknown[]): HistoryPoint[] {
         .map((event, index): HistoryPoint | null => {
             const record = asRecord(event);
 
+            // myTischtennis liefert pro Event ttr_after und event_date_time
             const ttr = firstNumber(record, [
+                "ttr_after",
                 "ttr",
                 "qttr",
                 "value",
@@ -214,6 +233,7 @@ function normalizeHistoryPoints(events: unknown[]): HistoryPoint[] {
             }
 
             const date = firstString(record, [
+                "event_date_time",
                 "date",
                 "datum",
                 "event_date",
@@ -392,7 +412,8 @@ function buildPlayerSnapshot(params: {
                 ttr: point.ttr,
                 label: point.label
             })),
-            recentEvents: events.slice(-10)
+            // Reihenfolge von myTischtennis nicht voraussetzen, sonst landen evtl. die ältesten Events hier
+            recentEvents: sortEventsOldestFirst(events).slice(-10)
         },
         error: {
             ttr: params.ttrResult.error ?? null,
