@@ -3,7 +3,13 @@ import { LeagueTableResponseSchema, type LeagueTableResponse } from "../../schem
 import { parseUpstream } from "../../upstream/parse.js";
 import { RemixContextParseError } from "./remixContext.js";
 
-export type PromotionState = "promotion" | "relegation" | "none";
+// "promotionPlayoff" / "relegationPlayoff" sind die Relegationsplätze (Symbol rise-secondary / fall-secondary).
+export type PromotionState =
+    | "promotion"
+    | "promotionPlayoff"
+    | "relegation"
+    | "relegationPlayoff"
+    | "none";
 
 // Auf- und Abstiegsplätze sind in der Seite nur als Symbol (#rise / #fall) markiert.
 function promotionStateOfRow(rowHtml: string): PromotionState {
@@ -11,12 +17,21 @@ function promotionStateOfRow(rowHtml: string): PromotionState {
         return "promotion";
     }
 
-    return /#fall(?:["'#\s>]|$)/i.test(rowHtml) ? "relegation" : "none";
+    if (/#rise-secondary(?:["'#\s>]|$)/i.test(rowHtml)) {
+        return "promotionPlayoff";
+    }
+
+    if (/#fall(?:["'#\s>]|$)/i.test(rowHtml)) {
+        return "relegation";
+    }
+
+    return /#fall-secondary(?:["'#\s>]|$)/i.test(rowHtml) ? "relegationPlayoff" : "none";
 }
 
 /**
  * Auf/Abstieg einer Tabellenzeile aus den Loader Daten bzw. der API.
- * `rise_fall_state` ist die genauere Angabe, `tendency` der Ersatz.
+ * `rise_fall_state` ist die genauere Angabe (rise, riseRelegation, fallRelegation, fall, none),
+ * `tendency` der Ersatz.
  */
 export function promotionStateOfApiRow(row: {
     rise_fall_state?: string | null;
@@ -24,11 +39,18 @@ export function promotionStateOfApiRow(row: {
 }): PromotionState {
     const state = row.rise_fall_state ?? row.tendency;
 
-    if (state === "rise") {
-        return "promotion";
+    switch (state) {
+        case "rise":
+            return "promotion";
+        case "riseRelegation":
+            return "promotionPlayoff";
+        case "fall":
+            return "relegation";
+        case "fallRelegation":
+            return "relegationPlayoff";
+        default:
+            return "none";
     }
-
-    return state === "fall" ? "relegation" : "none";
 }
 
 function toInt(value: string | undefined): number | null {

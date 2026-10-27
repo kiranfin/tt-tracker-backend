@@ -82,6 +82,9 @@ describe("league table page", () => {
         assert.equal(promotionStateOfApiRow({ rise_fall_state: "fall", tendency: "rise" }), "relegation");
         assert.equal(promotionStateOfApiRow({ tendency: "rise" }), "promotion");
         assert.equal(promotionStateOfApiRow({ rise_fall_state: null, tendency: "fall" }), "relegation");
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: "riseRelegation", tendency: "steady" }), "promotionPlayoff");
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: "fallRelegation" }), "relegationPlayoff");
+        assert.equal(promotionStateOfApiRow({ rise_fall_state: "none", tendency: "steady" }), "none");
         assert.equal(promotionStateOfApiRow({ tendency: "none" }), "none");
         assert.equal(promotionStateOfApiRow({}), "none");
     });
@@ -134,6 +137,24 @@ describe("league table page", () => {
         assert.deepEqual(
             data.map((row) => row.promotion_state),
             ["promotion", "none"]
+        );
+    });
+
+    it("reads playoff places from the secondary icons", () => {
+        const html = `
+<table>
+  <thead><tr><th>Rang</th><th>Mannschaft</th><th>Punkte</th></tr></thead>
+  <tbody>
+    <tr><td><svg><use href="/i.svg#rise-secondary"></use></svg>1</td><td><a href="/x/mannschaft/1/A/y">A</a></td><td>10:2</td></tr>
+    <tr><td><svg><use href="/i.svg#fall-secondary"></use></svg>2</td><td><a href="/x/mannschaft/2/B/y">B</a></td><td>2:10</td></tr>
+  </tbody>
+</table>`;
+
+        const { data } = parseLeagueTableFromHtmlTable(html);
+
+        assert.deepEqual(
+            data.map((row) => row.promotion_state),
+            ["promotionPlayoff", "relegationPlayoff"]
         );
     });
 

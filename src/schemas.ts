@@ -151,7 +151,7 @@ export const LeagueTableRowSchema = z.object({
     tendency: z.string().nullable().optional(),
     rise_fall_state: z.string().nullable().optional(),
     promotion_state: z
-        .enum(["promotion", "relegation", "none"])
+        .enum(["promotion", "promotionPlayoff", "relegation", "relegationPlayoff", "none"])
         .nullable()
         .optional(),
     is_excluded: z.boolean().nullable().optional(),
