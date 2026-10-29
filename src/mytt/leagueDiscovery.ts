@@ -1,5 +1,5 @@
 import { fetchWithFallback } from "../sources/fetchWithFallback.js";
-import { fetchHtmlPage } from "../sources/html/fetchPage.js";
+import { fetchHtmlPage, fetchHtmlPageWithUrl } from "../sources/html/fetchPage.js";
 import { UpstreamFormatError } from "../upstream/errors.js";
 import { getJsonFromMytt } from "./request.js";
 
@@ -36,7 +36,7 @@ export type LeagueClassReference = {
     leagueSlug: string;
 };
 
-type LeagueHierarchyUpstream = {
+export type LeagueHierarchyUpstream = {
     data?: Array<{
         contest?: string | null;
         groups?: Array<{
@@ -50,7 +50,13 @@ type LeagueHierarchyUpstream = {
         }>;
     }>;
     higherLeagues?: unknown[];
-    lowerLeagues?: unknown[];
+    lowerLeagues?: Array<{
+        type?: string | null;
+        regionName?: string | null;
+        championshipName?: string | null;
+        championshipNickname?: string | null;
+        federationNickname?: string | null;
+    }>;
     championship?: string;
     association?: string;
     season?: string;
@@ -86,6 +92,13 @@ export const ASSOCIATIONS: AssociationReference[] = [
         shortName: "ByTTV",
         name: "Bayern",
         androPattern: "DE.SU.R1.02"
+    },
+    {
+        id: "BTTV",
+        association: "BTTV",
+        shortName: "BTTV",
+        name: "Berlin",
+        androPattern: "DE.NO.R6.03"
     },
     {
         id: "TTVB",
@@ -158,11 +171,25 @@ export const ASSOCIATIONS: AssociationReference[] = [
         androPattern: "DE.SW.R7.13"
     },
     {
+        id: "STTV",
+        association: "STTV",
+        shortName: "STTV",
+        name: "Sachsen",
+        androPattern: "DE.SU.R8.14"
+    },
+    {
         id: "TTVSA",
         association: "TTVSA",
         shortName: "TTVSA",
         name: "Sachsen-Anhalt",
         androPattern: "DE.SU.R8.15"
+    },
+    {
+        id: "TTVSH",
+        association: "TTVSH",
+        shortName: "TTVSH",
+        name: "Schleswig-Holstein",
+        androPattern: "DE.NO.R6.16"
     },
     {
         id: "TTTV",
@@ -300,7 +327,7 @@ function fetchMyttJson<T>(pathSegments: string[], query: Record<string, string |
     });
 }
 
-function extractRegionLinks(
+export function extractRegionLinks(
     html: string,
     association: string,
     season: string
@@ -326,12 +353,18 @@ function extractRegionLinks(
             continue;
         }
 
-        const afterMarker = href
+        const parts = href
             .slice(markerIndex + marker.length)
             .split(/[?#]/)[0]
-            .split("/")[0];
+            .split("/");
 
-        const championshipSlug = safeDecodeURIComponent(afterMarker);
+        // Links auf einzelne Gruppen (".../ligen/Landesliga_Gr._1/gruppe/520588/...") sind keine Ebene,
+        // das erste Segment ist dort der Liga Slug.
+        if (parts[1] === "gruppe") {
+            continue;
+        }
+
+        const championshipSlug = safeDecodeURIComponent(parts[0] ?? "");
 
         if (!championshipSlug || seen.has(championshipSlug)) {
             continue;
@@ -358,6 +391,100 @@ function extractRegionLinks(
     return result;
 }
 
+// "SK Bez. HN 26/27" -> "SK_Bez._HN_26--27", so baut myTischtennis die Pfade.
+export function toChampionshipSlug(nickname: string): string {
+    return nickname
+        .trim()
+        .replace(/\//g, "--")
+        .replace(/\s+/g, "_");
+}
+
+// Slug aus ".../click-tt/TTBW/26--27/ligen/SK_TTBW_26--27", sonst null.
+export function championshipSlugFromUrl(
+    url: string,
+    association: string,
+    season: string
+): string | null {
+    let pathname: string;
+
+    try {
+        pathname = new URL(url).pathname;
+    } catch {
+        return null;
+    }
+
+    const marker = `/click-tt/${association}/${season}/ligen/`.toLowerCase();
+    const markerIndex = pathname.toLowerCase().indexOf(marker);
+
+    if (markerIndex === -1) {
+        return null;
+    }
+
+    const slug = pathname.slice(markerIndex + marker.length).split("/")[0] ?? "";
+
+    return safeDecodeURIComponent(slug) || null;
+}
+
+function withoutSeasonSuffix(name: string): string {
+    return name.replace(/\s+\d{2}(\d{2})?\/\d{2}$/, "").trim();
+}
+
+/**
+ * Regionen aus der Hierarchie einer Ebene: die Ebene selbst plus ihre direkten Unterebenen
+ * im selben Verband. Unterebenen anderer Verbände (beim DTTB alle Landesverbände) haben
+ * eigene Pfade und tauchen als eigener Verband auf.
+ */
+export function regionsFromHierarchy(
+    raw: LeagueHierarchyUpstream,
+    association: string,
+    season: string,
+    rootSlug: string
+): RegionReference[] {
+    const result: RegionReference[] = [
+        {
+            id: `${association}:${season}:${rootSlug}`,
+            name: "Verbandsspielklassen",
+            association,
+            season,
+            championshipSlug: rootSlug,
+            type: "association"
+        }
+    ];
+
+    const seen = new Set([rootSlug]);
+
+    for (const league of raw.lowerLeagues ?? []) {
+        const nickname = league.championshipNickname?.trim() ?? "";
+        const federation = league.federationNickname?.trim().toLowerCase() ?? "";
+
+        if (!nickname || federation !== association.toLowerCase()) {
+            continue;
+        }
+
+        const championshipSlug = toChampionshipSlug(nickname);
+
+        if (seen.has(championshipSlug)) {
+            continue;
+        }
+
+        seen.add(championshipSlug);
+
+        result.push({
+            id: `${association}:${season}:${championshipSlug}`,
+            name:
+                withoutSeasonSuffix(league.championshipName?.trim() ?? "") ||
+                league.regionName?.trim() ||
+                nickname,
+            association,
+            season,
+            championshipSlug,
+            type: "region"
+        });
+    }
+
+    return result;
+}
+
 export async function loadLeagueRegions(
     association: string,
     season: string
@@ -366,20 +493,42 @@ export async function loadLeagueRegions(
     season: string;
     regions: RegionReference[];
 }> {
-    const html = await fetchMyttPage([
-        "click-tt",
-        association,
-        season,
-        "ligen"
-    ]);
+    const { html, finalUrl } = await fetchHtmlPageWithUrl({
+        path: toPath(["click-tt", association, season, "ligen"])
+    });
 
-    const regions = extractRegionLinks(html, association, season);
+    let regions = extractRegionLinks(html, association, season);
+
+    // Manche Verbände (z.B. TTBW, HaTTV, STTB, DTTB) leiten die Übersicht direkt auf ihre
+    // Verbandsebene weiter. Dort stehen nur Gruppen Links, die Unterebenen gibt es nur im JSON.
+    const rootSlug =
+        regions.length === 0 ? championshipSlugFromUrl(finalUrl, association, season) : null;
+
+    if (rootSlug) {
+        const raw = await fetchLeagueHierarchy(association, season, "ligen", rootSlug);
+
+        regions = regionsFromHierarchy(raw, association, season, rootSlug);
+    }
 
     return {
         association,
         season,
         regions
     };
+}
+
+function fetchLeagueHierarchy(
+    association: string,
+    season: string,
+    competitionType: "ligen" | "pokalspiele",
+    championship: string
+) {
+    return fetchMyttJson<LeagueHierarchyUpstream>(
+        ["click-tt", association, season, competitionType, championship],
+        {
+            _data: "routes/click-tt+/$association+/$season+/$type+/$championship"
+        }
+    );
 }
 
 function normalizeLeagueHierarchy(
@@ -536,11 +685,11 @@ export async function loadLeagueClasses(params: {
         // Die Seite hat einen eigenen Parser (Links), unabhängig vom JSON Format.
         fallbackOnFormatError: true,
         primary: async () => {
-            const raw = await fetchMyttJson<LeagueHierarchyUpstream>(
-                ["click-tt", association, season, competitionType, championship],
-                {
-                    _data: "routes/click-tt+/$association+/$season+/$type+/$championship"
-                }
+            const raw = await fetchLeagueHierarchy(
+                association,
+                season,
+                competitionType,
+                championship
             );
 
             let normalized: ReturnType<typeof normalizeLeagueHierarchy>;

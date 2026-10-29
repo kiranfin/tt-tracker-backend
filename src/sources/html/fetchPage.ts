@@ -15,6 +15,14 @@ export async function fetchHtmlPage(params: {
     path: string;
     searchParams?: URLSearchParams;
 }): Promise<string> {
+    return (await fetchHtmlPageWithUrl(params)).html;
+}
+
+/** Wie fetchHtmlPage, liefert zusätzlich die URL nach allen Weiterleitungen. */
+export async function fetchHtmlPageWithUrl(params: {
+    path: string;
+    searchParams?: URLSearchParams;
+}): Promise<{ html: string; finalUrl: string }> {
     const url = new URL(`${baseUrl}${params.path}`);
 
     params.searchParams?.forEach((value, key) => {
@@ -47,5 +55,5 @@ export async function fetchHtmlPage(params: {
         );
     }
 
-    return bodyText;
+    return { html: bodyText, finalUrl: response.url || url.toString() };
 }

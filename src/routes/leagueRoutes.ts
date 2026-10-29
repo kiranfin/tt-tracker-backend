@@ -49,10 +49,14 @@ async function sendRegionsResponse(
     const association = associationRef.association;
     const season = normalizeSeason(seasonValue);
 
-    const cacheKey = `league-regions:${association}:${season}`;
+    // v2: ältere Einträge enthalten bei weiterleitenden Verbänden Gruppen statt Ebenen.
+    const cacheKey = `league-regions:v2:${association}:${season}`;
     const result = await readThrough({
         key: cacheKey,
-        ttlMs: LEAGUE_DISCOVERY_TTL.REGIONS,
+        ttlMs: ttlUnlessEmpty(
+            LEAGUE_DISCOVERY_TTL.REGIONS,
+            (value: { regions: unknown[] }) => value.regions.length === 0
+        ),
         load: () => loadLeagueRegions(association, season)
     });
 
@@ -103,7 +107,10 @@ async function sendClassesResponse(
     const cacheKey = `league-classes:${association}:${season}:${competitionType}:${championship}`;
     const result = await readThrough({
         key: cacheKey,
-        ttlMs: LEAGUE_DISCOVERY_TTL.CLASSES,
+        ttlMs: ttlUnlessEmpty(
+            LEAGUE_DISCOVERY_TTL.CLASSES,
+            (value: { classes: unknown[] }) => value.classes.length === 0
+        ),
         load: () =>
             loadLeagueClasses({
                 association,
