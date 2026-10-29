@@ -45,6 +45,13 @@ export class MyttAccountRequiredError extends Error {
     }
 }
 
+export class MyttSessionUploadRequiredError extends Error {
+    constructor() {
+        super("Owner has no valid myTischtennis session on the server");
+        this.name = "MyttSessionUploadRequiredError";
+    }
+}
+
 export class MyttSessionExpiredError extends Error {
     sessionOwnerUserId: string;
     delegated: boolean;
@@ -168,6 +175,60 @@ function isGrantActive(grant: MyttGrant, requiredScope: MyttScope) {
     return true;
 }
 
+/** Freigabe, die weder widerrufen noch abgelaufen ist, unabhängig vom Scope. */
+function isGrantLive(grant: MyttGrant) {
+    if (grant.revokedAt) {
+        return false;
+    }
+
+    return !grant.expiresAt || new Date(grant.expiresAt).getTime() > Date.now();
+}
+
+/**
+ * Der Cookie liegt nur auf dem Server, solange der Besitzer teilt. Ohne lebende Freigabe wird er gelöscht:
+ * sofort nach dem Widerruf, bei Ablauf beim nächsten Zugriff. Wer nie geteilt hat (Altbestand), bleibt unberührt.
+ */
+function pruneUnsharedSession(
+    store: StoreFile,
+    ownerUserId: string,
+    trigger: "revoked" | "expired"
+) {
+    if (!store.sessions[ownerUserId]) {
+        return false;
+    }
+
+    const grants = Object.values(store.grants).filter(
+        (grant) => grant.ownerUserId === ownerUserId
+    );
+
+    if (grants.some(isGrantLive)) {
+        return false;
+    }
+
+    if (
+        trigger === "expired" &&
+        !grants.some((grant) => !grant.revokedAt)
+    ) {
+        return false;
+    }
+
+    delete store.sessions[ownerUserId];
+
+    return true;
+}
+
+function pruneExpiredShares(store: StoreFile) {
+    let pruned = false;
+
+    for (const ownerUserId of Object.keys(store.sessions)) {
+        if (pruneUnsharedSession(store, ownerUserId, "expired")) {
+            pruned = true;
+        }
+    }
+
+    return pruned;
+}
+
 function assertValidCookieHeader(cookie: string) {
     const trimmed = cookie.trim();
 
@@ -229,6 +290,10 @@ export async function markMyttSessionExpired(ownerUserId: string) {
 export async function getMyttStatusForUser(userId: string) {
     const store = await readStore();
 
+    if (pruneExpiredShares(store)) {
+        await writeStore(store);
+    }
+
     const ownSession = store.sessions[userId] ?? null;
 
     const grantsGiven = Object.values(store.grants).filter(
@@ -250,7 +315,9 @@ export async function getMyttStatusForUser(userId: string) {
             }
             : null,
         grantsGiven,
-        grantsReceived
+        grantsReceived,
+        // Die App lädt einen neuen Cookie nur hoch, wenn gerade geteilt wird.
+        hasActiveGrants: grantsGiven.some(isGrantLive)
     };
 }
 
@@ -273,6 +340,12 @@ export async function createMyttGrant(params: {
     }
 
     const store = await readStore();
+
+    // Der Cookie liegt standardmäßig nur auf dem Gerät. Wer teilen will, lädt ihn vorher hoch.
+    if (store.sessions[params.ownerUserId]?.status !== "valid") {
+        throw new MyttSessionUploadRequiredError();
+    }
+
     const id = crypto.randomUUID();
     const now = nowIso();
 
@@ -306,6 +379,8 @@ export async function revokeMyttGrant(params: {
 
     grant.revokedAt = nowIso();
 
+    pruneUnsharedSession(store, params.ownerUserId, "revoked");
+
     await writeStore(store);
 
     return true;
@@ -324,6 +399,10 @@ export async function resolveMyttSessionForRequest(params: {
     requiredScope: MyttScope;
 }): Promise<ResolvedMyttSession> {
     const store = await readStore();
+
+    if (pruneExpiredShares(store)) {
+        await writeStore(store);
+    }
 
     const ownSession = store.sessions[params.requesterUserId];
 

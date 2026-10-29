@@ -3,7 +3,8 @@ import { ZodError } from "zod";
 import { AppUserRequiredError, InvalidAppUserError } from "../appUser.js";
 import {
     MyttAccountRequiredError,
-    MyttSessionExpiredError
+    MyttSessionExpiredError,
+    MyttSessionUploadRequiredError
 } from "../myttSessionStore.js";
 import {
     LocalRateLimitError,
@@ -83,6 +84,16 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
                 code: "MYTT_ACCOUNT_REQUIRED",
                 message:
                     "Für diese Funktion ist eine eigene oder freigegebene myTischtennis-Session nötig."
+            }
+        });
+    }
+
+    if (error instanceof MyttSessionUploadRequiredError) {
+        return reply.code(409).send({
+            error: {
+                code: "MYTT_SESSION_UPLOAD_REQUIRED",
+                message:
+                    "Zum Freigeben muss deine myTischtennis-Session auf den Server geladen werden."
             }
         });
     }
