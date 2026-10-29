@@ -54,6 +54,68 @@ export const ClubTeamsResponseSchema = z.object({
     error: z.unknown().nullable().optional()
 });
 
+// Kopf der Vereinsseite (Layout Loader), einzige Quelle für die Logo ID.
+export const ClubHeadDataResponseSchema = z
+    .object({
+        headData: z
+            .object({
+                club_nr: z.string().nullable().optional(),
+                logo_id: z.string().nullable().optional(),
+                club_name: z.string().nullable().optional(),
+                region_name: z.string().nullable().optional(),
+                foundation_year: z.string().nullable().optional()
+            })
+            .passthrough()
+            .nullable()
+            .optional()
+    })
+    .passthrough();
+
+// Adresse, Spiellokal oder Funktionär. "website" enthält bei Spiellokalen oft nur einen Hinweistext.
+export const ClubInfoContactSchema = z
+    .object({
+        label: z.string().nullable().optional(),
+        role: z.string().nullable().optional(),
+        contact_name: z.string().nullable().optional(),
+        street: z.string().nullable().optional(),
+        zipcode: z.string().nullable().optional(),
+        city: z.string().nullable().optional(),
+        website: z.string().nullable().optional(),
+        email_home: z.string().nullable().optional(),
+        email_work: z.string().nullable().optional(),
+        phone_home: z.string().nullable().optional(),
+        phone_work: z.string().nullable().optional(),
+        phone_mobile: z.string().nullable().optional()
+    })
+    .passthrough();
+
+export const ClubInfoResponseSchema = z
+    .object({
+        data: z
+            .object({
+                club_nr: z.string().nullable().optional(),
+                club_name: z.string().nullable().optional(),
+                club_infos: z
+                    .object({
+                        club_contacts: z.array(ClubInfoContactSchema).nullable().optional(),
+                        club_officials: z.array(ClubInfoContactSchema).nullable().optional()
+                    })
+                    .passthrough()
+                    .nullable()
+                    .optional(),
+                region_name: z.string().nullable().optional(),
+                foundation_year: z.string().nullable().optional(),
+                organization_name: z.string().nullable().optional()
+            })
+            .passthrough()
+            .nullable()
+            .optional(),
+        season: z.string().nullable().optional(),
+        association: z.string().nullable().optional(),
+        error: z.unknown().nullable().optional()
+    })
+    .passthrough();
+
 export const ClubPlayerSchema = z
     .object({
         person_id: z.string().nullable().optional(),
@@ -570,6 +632,10 @@ export type ClubSearchResponse = z.infer<typeof ClubSearchResponseSchema>;
 
 export type ClubTeam = z.infer<typeof ClubTeamSchema>;
 export type ClubTeamsResponse = z.infer<typeof ClubTeamsResponseSchema>;
+
+export type ClubHeadDataResponse = z.infer<typeof ClubHeadDataResponseSchema>;
+export type ClubInfoContact = z.infer<typeof ClubInfoContactSchema>;
+export type ClubInfoResponse = z.infer<typeof ClubInfoResponseSchema>;
 
 export type ClubPlayer = z.infer<typeof ClubPlayerSchema>;
 export type ClubPlayersResponse = z.infer<typeof ClubPlayersResponseSchema>;

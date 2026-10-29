@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import {
+    getClubInfo,
     getClubPlayersFromAndroRanking,
     getClubSchedule,
     getClubTeams
@@ -35,7 +36,64 @@ function getDefaultSeasonDates(season: string) {
     };
 }
 
+// Saison wechselt zum 1. Juli, Format wie in den click-tt URLs ("26--27").
+function getCurrentSeasonSegment(now = new Date()) {
+    const startYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+    const short = (year: number) => String(year % 100).padStart(2, "0");
+
+    return `${short(startYear)}--${short(startYear + 1)}`;
+}
+
 export async function clubRoutes(app: FastifyInstance) {
+    app.get("/api/clubs/:organization/:clubNumber/info", async (request, reply) => {
+        const params = request.params as {
+            organization?: string;
+            clubNumber?: string;
+        };
+
+        const query = request.query as {
+            season?: string;
+            clubSlug?: string;
+        };
+
+        const organization = params.organization?.trim().toUpperCase() ?? "";
+        const clubNumber = params.clubNumber?.trim() ?? "";
+        const season = query.season?.trim().replace("/", "--") || getCurrentSeasonSegment();
+        const clubSlug = query.clubSlug?.trim() || "x";
+
+        if (!organization || !clubNumber || !/^\d{2}--\d{2}$/.test(season)) {
+            return reply.code(400).send({
+                error: {
+                    code: "INVALID_INPUT",
+                    message: "organization, clubNumber und eine gültige season sind erforderlich."
+                }
+            });
+        }
+
+        try {
+            // Der Slug ändert die Daten nicht, deshalb nicht im Cache Key.
+            const result = await readThrough({
+                key: `club-info:${organization}:${clubNumber}:${season}`,
+                ttlMs: CACHE_TTL.CLUB_INFO,
+                load: () =>
+                    getClubInfo({
+                        organization,
+                        clubNumber,
+                        season,
+                        clubSlug
+                    })
+            });
+
+            return {
+                data: result.value,
+                meta: buildMeta(result)
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
     app.get("/api/clubs/:organization/:clubNumber/teams", async (request, reply) => {
         const params = request.params as {
             organization?: string;
