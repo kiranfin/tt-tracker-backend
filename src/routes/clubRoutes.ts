@@ -4,19 +4,16 @@ import { CACHE_TTL } from "../constants.js";
 import {
     getClubHead,
     getClubInfo,
-    getClubPlayersFromAndroRanking,
     getClubSchedule,
     getClubTeams
 } from "../mytt/index.js";
+import { readClubPlayers } from "../mytt/clubPlayersCache.js";
 import { isEmptyClubSchedule, ttlUnlessEmpty } from "../sources/validate.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
 const CLUB_SCHEDULE_CACHE_TTL =
     (CACHE_TTL as Record<string, number>).CLUB_SCHEDULE ?? CACHE_TTL.CLUB_TEAMS;
-
-const CLUB_PLAYERS_CACHE_TTL =
-    (CACHE_TTL as Record<string, number>).CLUB_PLAYERS ?? CACHE_TTL.CLUB_TEAMS;
 
 function getDefaultSeasonDates(season: string) {
     const match = /^(\d{2})--(\d{2})$/.exec(season);
@@ -227,25 +224,12 @@ export async function clubRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = [
-            "club-players-andro",
-            organization,
-            clubNumber,
-            androClubNr ?? "",
-            clubName ?? ""
-        ].join(":");
-
         try {
-            const result = await readThrough({
-                key: cacheKey,
-                ttlMs: CLUB_PLAYERS_CACHE_TTL,
-                load: () =>
-                    getClubPlayersFromAndroRanking({
-                        organization,
-                        clubNumber,
-                        androClubNr,
-                        clubName
-                    })
+            const result = await readClubPlayers({
+                organization,
+                clubNumber,
+                androClubNr,
+                clubName
             });
 
             return {
