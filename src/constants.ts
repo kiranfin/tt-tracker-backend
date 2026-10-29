@@ -7,6 +7,8 @@ export const CACHE_TTL = {
     CLUB_TEAMS: 60 * 60 * 1000,
     // Adressen, Spiellokale und Vorstand ändern sich selten.
     CLUB_INFO: 12 * 60 * 60 * 1000,
+    // Vereinslogos (Layout Loader), ändern sich fast nie.
+    CLUB_HEAD: 7 * 24 * 60 * 60 * 1000,
     LEAGUE_TABLE: 15 * 60 * 1000,
     LEAGUE_SCHEDULE: 60 * 60 * 1000,
 

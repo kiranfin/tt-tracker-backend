@@ -173,12 +173,63 @@ function toOfficial(entry: ClubInfoContact): ClubOfficial {
     };
 }
 
-export async function getClubInfo(params: {
+// Kopf der Vereinsseite. Nur so kommt man an die Logo ID, die Vereinssuche liefert keine mit.
+export type ClubHead = {
+    // null, wenn click-tt den Verein unter diesem Verband nicht kennt
+    clubNumber: string | null;
+    clubName: string | null;
+    logoUrl: string | null;
+    region: string | null;
+    foundationYear: number | null;
+};
+
+export function buildClubLogoUrl(logoId: string) {
+    return `${CLUB_LOGO_BASE_URL}${encodeURIComponent(logoId)}?pixelHeight=160&onlyScaleSmaller=true&quality=0.9`;
+}
+
+export async function getClubHead(params: {
     organization: string;
     clubNumber: string;
     season: string;
     clubSlug?: string;
-}): Promise<ClubInfo> {
+}): Promise<ClubHead> {
+    const response = await getRouteDataWithHtmlFallback({
+        name: "club_layout",
+        path: buildClubContextPath({
+            association: params.organization,
+            season: params.season,
+            clubNumber: params.clubNumber,
+            clubSlug: params.clubSlug,
+            page: "info"
+        }),
+        searchParams: new URLSearchParams({ _data: CLUB_LAYOUT_ROUTE_ID }),
+        schema: ClubHeadDataResponseSchema
+    });
+
+    const headData = response.headData;
+    const logoId = clean(headData?.logo_id);
+
+    return {
+        clubNumber: clean(headData?.club_nr),
+        clubName: clean(headData?.club_name),
+        logoUrl: logoId ? buildClubLogoUrl(logoId) : null,
+        region: clean(headData?.region_name),
+        foundationYear: parseFoundationYear(headData?.foundation_year)
+    };
+}
+
+type ClubInfoParams = {
+    organization: string;
+    clubNumber: string;
+    season: string;
+    clubSlug?: string;
+};
+
+// loadHead erlaubt dem Aufrufer, den Kopf aus dem Cache zu holen (der Logo Endpoint nutzt denselben).
+export async function getClubInfo(
+    params: ClubInfoParams,
+    loadHead: () => Promise<ClubHead> = () => getClubHead(params)
+): Promise<ClubInfo> {
     const path = buildClubContextPath({
         association: params.organization,
         season: params.season,
@@ -202,31 +253,22 @@ export async function getClubInfo(params: {
                 return value;
             }
         }),
-        getRouteDataWithHtmlFallback({
-            name: "club_layout",
-            path,
-            searchParams: new URLSearchParams({ _data: CLUB_LAYOUT_ROUTE_ID }),
-            schema: ClubHeadDataResponseSchema
-        }).catch(() => null)
+        loadHead().catch(() => null)
     ]);
 
     const data = info.data;
-    const headData = head?.headData;
     const contacts = data?.club_infos?.club_contacts ?? [];
     const officials = data?.club_infos?.club_officials ?? [];
 
     const venues = contacts.filter((entry) => /spiellokal/i.test(entry.label ?? "")).map(toPerson);
     const contactEntry = contacts.find((entry) => !/spiellokal/i.test(entry.label ?? ""));
-    const logoId = clean(headData?.logo_id);
 
     return {
         clubNumber: clean(data?.club_nr) ?? params.clubNumber,
-        clubName: clean(data?.club_name) ?? clean(headData?.club_name),
-        logoUrl: logoId
-            ? `${CLUB_LOGO_BASE_URL}${encodeURIComponent(logoId)}?pixelHeight=160&onlyScaleSmaller=true&quality=0.9`
-            : null,
-        region: clean(data?.region_name) ?? clean(headData?.region_name),
-        foundationYear: parseFoundationYear(headData?.foundation_year) ?? parseFoundationYear(data?.foundation_year),
+        clubName: clean(data?.club_name) ?? head?.clubName ?? null,
+        logoUrl: head?.logoUrl ?? null,
+        region: clean(data?.region_name) ?? head?.region ?? null,
+        foundationYear: head?.foundationYear ?? parseFoundationYear(data?.foundation_year),
         organizationName: clean(data?.organization_name),
         association: params.organization,
         season: params.season,
