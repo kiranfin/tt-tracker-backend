@@ -10,6 +10,7 @@ import {
     readClubPlayers,
     toPublicRating
 } from "../mytt/index.js";
+import { estimatePlayerTtr } from "../rating/playerEstimate.js";
 import { resolveMyttSessionForRequest, type MyttScope } from "../myttSessionStore.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
@@ -797,6 +798,54 @@ export async function playerRoutes(app: FastifyInstance) {
                     ttr: result.ttr ?? null,
                     error: result.error ?? null
                 },
+                meta: buildMeta(cached)
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
+    // Geschätzter TTR und Verlauf aus öffentlichen Spielberichten, ohne myTischtennis Login.
+    app.get("/api/players/:nuid/ttr-estimate", async (request, reply) => {
+        try {
+            const { nuid: rawNuid } = request.params as { nuid: string };
+            const nuid = normalizeNuid(rawNuid);
+
+            const query = request.query as {
+                organization?: string;
+                clubNumber?: string;
+            };
+
+            const organization = query.organization?.trim().toUpperCase() ?? "";
+            const clubNumber = query.clubNumber?.trim() ?? "";
+
+            if (!nuid || nuid.length < 3) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "Ungültige Spieler-ID."
+                    }
+                });
+            }
+
+            if (!organization || !clubNumber) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "organization und clubNumber sind erforderlich."
+                    }
+                });
+            }
+
+            const cached = await readThrough({
+                key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}`,
+                ttlMs: CACHE_TTL.PLAYER_TTR_ESTIMATE,
+                load: () => estimatePlayerTtr({ nuid, organization, clubNumber })
+            });
+
+            return {
+                data: cached.value,
                 meta: buildMeta(cached)
             };
         } catch (error) {
