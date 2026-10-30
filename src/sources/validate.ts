@@ -1,4 +1,3 @@
-import { CACHE_TTL } from "../constants.js";
 import { writeJsonLog } from "../fileLogger.js";
 import type {
     ClubScheduleResponse,
@@ -123,7 +122,7 @@ function checkMeetings(meetings: unknown[], source: string) {
 }
 
 // [{ "2025-10-04": [meeting, ...] }, ...] zu einer flachen Liste.
-function flattenDateGroups(groups: unknown): unknown[] {
+export function flattenDateGroups(groups: unknown): unknown[] {
     if (!Array.isArray(groups)) {
         return [];
     }
@@ -195,9 +194,4 @@ export function isEmptyTeamBalances(value: TeamBalancesResponse): boolean {
 
         return !Array.isArray(list) || list.length === 0;
     });
-}
-
-/** Cache TTL, die für leere Ergebnisse auf CACHE_TTL.EMPTY_RESULT gekürzt wird. */
-export function ttlUnlessEmpty<T>(ttlMs: number, isEmpty: (value: T) => boolean) {
-    return (value: T) => (isEmpty(value) ? Math.min(ttlMs, CACHE_TTL.EMPTY_RESULT) : ttlMs);
 }

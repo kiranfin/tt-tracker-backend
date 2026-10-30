@@ -29,15 +29,16 @@ async function hasServerSession(userId: string) {
 }
 
 describe("myttSessionStore sharing", () => {
-    it("requires an uploaded session before a grant can be created", async () => {
-        await assert.rejects(
-            store.createMyttGrant({
-                ownerUserId: "owner-a",
-                granteeUserId: "friend-a",
-                scopes: SCOPES
-            }),
-            store.MyttSessionUploadRequiredError
-        );
+    it("creates a grant without any cookie on the server", async () => {
+        const grant = await store.createMyttGrant({
+            ownerUserId: "owner-a",
+            granteeUserId: "friend-a",
+            scopes: SCOPES
+        });
+
+        assert.equal(grant.ownerUserId, "owner-a");
+        assert.equal(await hasServerSession("owner-a"), false);
+        assert.equal((await store.getMyttStatusForUser("friend-a")).grantsReceived.length, 1);
     });
 
     it("reports active grants in the status", async () => {

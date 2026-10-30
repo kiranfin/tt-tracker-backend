@@ -2,7 +2,21 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import crypto from "node:crypto";
 
-export type MyttScope = "ttr:read" | "ttr_history:read";
+import {
+    getGrant,
+    importLegacyGrants,
+    insertGrant,
+    isGrantActive,
+    isGrantLive,
+    listGrantsByGrantee,
+    listGrantsByOwner,
+    markGrantRevoked,
+    type MyttGrant,
+    type MyttScope
+} from "./store/grantStore.js";
+import { deleteSnapshot } from "./store/snapshotStore.js";
+
+export type { MyttGrant, MyttScope };
 
 type MyttSessionStatus = "valid" | "expired";
 
@@ -15,19 +29,11 @@ type StoredMyttSession = {
     lastVerifiedAt?: string | null;
 };
 
-export type MyttGrant = {
-    id: string;
-    ownerUserId: string;
-    granteeUserId: string;
-    scopes: MyttScope[];
-    expiresAt?: string | null;
-    createdAt: string;
-    revokedAt?: string | null;
-};
-
+// Die Freigaben liegen in der Ablage (SQLite). Hier stehen nur noch die Sessions der Altversion, und
+// Freigaben aus der alten Datei, bis sie in die Ablage übernommen sind.
 type StoreFile = {
     sessions: Record<string, StoredMyttSession>;
-    grants: Record<string, MyttGrant>;
+    legacyGrants?: Record<string, MyttGrant>;
 };
 
 export type ResolvedMyttSession = {
@@ -42,13 +48,6 @@ export class MyttAccountRequiredError extends Error {
     constructor() {
         super("No myTischtennis session available for this user");
         this.name = "MyttAccountRequiredError";
-    }
-}
-
-export class MyttSessionUploadRequiredError extends Error {
-    constructor() {
-        super("Owner has no valid myTischtennis session on the server");
-        this.name = "MyttSessionUploadRequiredError";
     }
 }
 
@@ -131,57 +130,41 @@ function decryptText(encryptedText: string) {
 }
 
 async function readStore(): Promise<StoreFile> {
-    try {
-        const raw = await readFile(STORE_FILE, "utf8");
-        const parsed = JSON.parse(raw) as Partial<StoreFile>;
+    let parsed: { sessions?: Record<string, StoredMyttSession>; grants?: Record<string, MyttGrant> } = {};
 
-        return {
-            sessions: parsed.sessions ?? {},
-            grants: parsed.grants ?? {}
-        };
+    try {
+        parsed = JSON.parse(await readFile(STORE_FILE, "utf8"));
     } catch {
-        return {
-            sessions: {},
-            grants: {}
-        };
+        parsed = {};
     }
+
+    const store: StoreFile = { sessions: parsed.sessions ?? {} };
+    const legacy = Object.values(parsed.grants ?? {});
+
+    if (legacy.length > 0) {
+        try {
+            importLegacyGrants(legacy);
+        } catch {
+            // Ohne Ablage bleiben die Freigaben in der Datei, bis sie sich übernehmen lassen.
+            store.legacyGrants = parsed.grants;
+        }
+    }
+
+    return store;
 }
 
 async function writeStore(store: StoreFile) {
     await mkdir(dirname(STORE_FILE), { recursive: true, mode: 0o700 });
 
-    writeQueue = writeQueue.then(() =>
-        writeFile(STORE_FILE, JSON.stringify(store, null, 2), {
-            mode: 0o600
-        })
+    const content = JSON.stringify(
+        { sessions: store.sessions, ...(store.legacyGrants ? { grants: store.legacyGrants } : {}) },
+        null,
+        2
     );
 
+    writeQueue = writeQueue.then(() => writeFile(STORE_FILE, content, { mode: 0o600 }));
+
     await writeQueue;
-}
-
-function isGrantActive(grant: MyttGrant, requiredScope: MyttScope) {
-    if (grant.revokedAt) {
-        return false;
-    }
-
-    if (!grant.scopes.includes(requiredScope)) {
-        return false;
-    }
-
-    if (grant.expiresAt && new Date(grant.expiresAt).getTime() <= Date.now()) {
-        return false;
-    }
-
-    return true;
-}
-
-/** Freigabe, die weder widerrufen noch abgelaufen ist, unabhängig vom Scope. */
-function isGrantLive(grant: MyttGrant) {
-    if (grant.revokedAt) {
-        return false;
-    }
-
-    return !grant.expiresAt || new Date(grant.expiresAt).getTime() > Date.now();
 }
 
 /**
@@ -197,11 +180,9 @@ function pruneUnsharedSession(
         return false;
     }
 
-    const grants = Object.values(store.grants).filter(
-        (grant) => grant.ownerUserId === ownerUserId
-    );
+    const grants = listGrantsByOwner(ownerUserId);
 
-    if (grants.some(isGrantLive)) {
+    if (grants.some((grant) => isGrantLive(grant))) {
         return false;
     }
 
@@ -296,13 +277,15 @@ export async function getMyttStatusForUser(userId: string) {
 
     const ownSession = store.sessions[userId] ?? null;
 
-    const grantsGiven = Object.values(store.grants).filter(
-        (grant) => grant.ownerUserId === userId && !grant.revokedAt
-    );
+    const grantsGiven = listGrantsByOwner(userId).filter((grant) => !grant.revokedAt);
+    const grantsReceived = listGrantsByGrantee(userId).filter((grant) => !grant.revokedAt);
 
-    const grantsReceived = Object.values(store.grants).filter(
-        (grant) => grant.granteeUserId === userId && !grant.revokedAt
-    );
+    const hasActiveGrants = grantsGiven.some((grant) => isGrantLive(grant));
+
+    // Geteilt wird nur, solange eine Freigabe lebt (auch nach Ablauf einer Freigabe).
+    if (!hasActiveGrants) {
+        deleteSnapshot(userId);
+    }
 
     return {
         userId,
@@ -316,8 +299,8 @@ export async function getMyttStatusForUser(userId: string) {
             : null,
         grantsGiven,
         grantsReceived,
-        // Die App lädt einen neuen Cookie nur hoch, wenn gerade geteilt wird.
-        hasActiveGrants: grantsGiven.some(isGrantLive)
+        // Die App lädt Snapshots nur hoch, wenn gerade geteilt wird.
+        hasActiveGrants
     };
 }
 
@@ -339,13 +322,6 @@ export async function createMyttGrant(params: {
         }
     }
 
-    const store = await readStore();
-
-    // Der Cookie liegt standardmäßig nur auf dem Gerät. Wer teilen will, lädt ihn vorher hoch.
-    if (store.sessions[params.ownerUserId]?.status !== "valid") {
-        throw new MyttSessionUploadRequiredError();
-    }
-
     const id = crypto.randomUUID();
     const now = nowIso();
 
@@ -359,9 +335,7 @@ export async function createMyttGrant(params: {
         revokedAt: null
     };
 
-    store.grants[id] = grant;
-
-    await writeStore(store);
+    insertGrant(grant);
 
     return grant;
 }
@@ -370,28 +344,30 @@ export async function revokeMyttGrant(params: {
     ownerUserId: string;
     grantId: string;
 }) {
-    const store = await readStore();
-    const grant = store.grants[params.grantId];
+    const grant = getGrant(params.grantId);
 
     if (!grant || grant.ownerUserId !== params.ownerUserId) {
         return false;
     }
 
-    grant.revokedAt = nowIso();
+    markGrantRevoked(grant.id, nowIso());
 
-    pruneUnsharedSession(store, params.ownerUserId, "revoked");
+    const store = await readStore();
 
-    await writeStore(store);
+    if (pruneUnsharedSession(store, params.ownerUserId, "revoked")) {
+        await writeStore(store);
+    }
+
+    // Geteilt wird nur, solange eine Freigabe lebt: danach verschwindet auch der Snapshot vom Server.
+    if (!listGrantsByOwner(params.ownerUserId).some((entry) => isGrantLive(entry))) {
+        deleteSnapshot(params.ownerUserId);
+    }
 
     return true;
 }
 
 export async function listMyttGrantsForOwner(ownerUserId: string) {
-    const store = await readStore();
-
-    return Object.values(store.grants).filter(
-        (grant) => grant.ownerUserId === ownerUserId && !grant.revokedAt
-    );
+    return listGrantsByOwner(ownerUserId).filter((grant) => !grant.revokedAt);
 }
 
 export async function resolveMyttSessionForRequest(params: {
@@ -415,12 +391,9 @@ export async function resolveMyttSessionForRequest(params: {
         };
     }
 
-    const activeGrant = Object.values(store.grants).find((grant) => {
-        return (
-            grant.granteeUserId === params.requesterUserId &&
-            isGrantActive(grant, params.requiredScope)
-        );
-    });
+    const activeGrant = listGrantsByGrantee(params.requesterUserId).find((grant) =>
+        isGrantActive(grant, params.requiredScope)
+    );
 
     if (activeGrant) {
         const ownerSession = store.sessions[activeGrant.ownerUserId];

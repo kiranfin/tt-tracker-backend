@@ -3,21 +3,43 @@ import { ZodError } from "zod";
 import { AppUserRequiredError, InvalidAppUserError } from "../appUser.js";
 import {
     MyttAccountRequiredError,
-    MyttSessionExpiredError,
-    MyttSessionUploadRequiredError
+    MyttSessionExpiredError
 } from "../myttSessionStore.js";
 import {
     LocalRateLimitError,
+    UpstreamChallengeError,
     UpstreamDisabledError,
     UpstreamError,
     UpstreamFormatError,
     UpstreamRateLimitError
 } from "../upstream/errors.js";
+import {
+    SharedPlayerNotFoundError,
+    SnapshotInvalidError,
+    SnapshotNotSharingError,
+    SnapshotPlayerMismatchError,
+    SnapshotThrottledError,
+    SnapshotTooLargeError
+} from "../snapshotErrors.js";
+import { StoreUnavailableError } from "../store/grantStore.js";
 import { InvalidTokenError } from "../authToken.js";
 import { UserNotFoundError } from "../authStore.js";
 
 const UPSTREAM_UNAVAILABLE_MESSAGE =
     "myTischtennis hat gerade eine Störung und liefert diese Daten nicht. Bitte später erneut versuchen.";
+
+const UPSTREAM_BLOCKED_MESSAGE =
+    "myTischtennis sperrt den Zugriff des Servers gerade (Verifizierung). Es werden vorerst nur gespeicherte Daten geliefert.";
+
+/** 400 mit dem einheitlichen Fehlerformat. */
+export function sendInvalidInput(reply: FastifyReply, message: string) {
+    return reply.code(400).send({
+        error: {
+            code: "INVALID_INPUT",
+            message
+        }
+    });
+}
 
 export function handleApiError(error: unknown, reply: FastifyReply) {
     // Vor ZodError: ein geändertes Format bei myTischtennis ist kein Fehler des Clients.
@@ -88,16 +110,6 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
         });
     }
 
-    if (error instanceof MyttSessionUploadRequiredError) {
-        return reply.code(409).send({
-            error: {
-                code: "MYTT_SESSION_UPLOAD_REQUIRED",
-                message:
-                    "Zum Freigeben muss deine myTischtennis-Session auf den Server geladen werden."
-            }
-        });
-    }
-
     if (error instanceof MyttSessionExpiredError) {
         return reply.code(401).send({
             error: {
@@ -107,6 +119,97 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
                 message: error.delegated
                     ? "Die freigegebene myTischtennis-Session ist abgelaufen."
                     : "Deine myTischtennis-Session ist abgelaufen. Bitte Cookie erneuern."
+            }
+        });
+    }
+
+    if (error instanceof SnapshotThrottledError) {
+        const retryAfterSeconds = Math.ceil(error.retryAfterMs / 1000);
+
+        reply.header("Retry-After", String(retryAfterSeconds));
+
+        return reply.code(429).send({
+            error: {
+                code: "SNAPSHOT_THROTTLED",
+                message: "Es wurde gerade erst ein Snapshot hochgeladen.",
+                retryAfterSeconds
+            }
+        });
+    }
+
+    if (error instanceof SnapshotNotSharingError) {
+        return reply.code(409).send({
+            error: {
+                code: "NOT_SHARING",
+                message: "Es gibt keine aktive Freigabe, deshalb wird nichts gespeichert."
+            }
+        });
+    }
+
+    if (error instanceof SnapshotPlayerMismatchError) {
+        return reply.code(409).send({
+            error: {
+                code: "PLAYER_MISMATCH",
+                message: "Der Snapshot gehört zu einem anderen Spieler als dem hinterlegten.",
+                registeredNuid: error.registeredNuid
+            }
+        });
+    }
+
+    if (error instanceof SnapshotInvalidError) {
+        return reply.code(400).send({
+            error: {
+                code: "INVALID_SNAPSHOT",
+                message: "Der Snapshot ist ungültig.",
+                details: error.reason
+            }
+        });
+    }
+
+    if (error instanceof SnapshotTooLargeError) {
+        return reply.code(413).send({
+            error: {
+                code: "SNAPSHOT_TOO_LARGE",
+                message: "Der Snapshot ist zu groß."
+            }
+        });
+    }
+
+    if (error instanceof SharedPlayerNotFoundError) {
+        return reply.code(404).send({
+            error: {
+                code: "NOT_SHARED",
+                message: "Für diesen Spieler wurde nichts mit dir geteilt."
+            }
+        });
+    }
+
+    if (error instanceof StoreUnavailableError) {
+        return reply.code(503).send({
+            error: {
+                code: "STORE_UNAVAILABLE",
+                message: "Die Ablage ist gerade nicht verfügbar."
+            }
+        });
+    }
+
+    // Challenge: myTischtennis hat die Server IP auf /verify umgeleitet, kein Rate Limit.
+    if (
+        error instanceof UpstreamChallengeError ||
+        (error instanceof LocalRateLimitError && error.reason === "upstream_challenge")
+    ) {
+        const retryAfterSeconds =
+            error instanceof LocalRateLimitError ? Math.ceil(error.retryAfterMs / 1000) : undefined;
+
+        if (retryAfterSeconds !== undefined) {
+            reply.header("Retry-After", String(retryAfterSeconds));
+        }
+
+        return reply.code(503).send({
+            error: {
+                code: "UPSTREAM_BLOCKED",
+                message: UPSTREAM_BLOCKED_MESSAGE,
+                ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {})
             }
         });
     }

@@ -33,7 +33,8 @@ function readBoolean(key: string, fallback: boolean): boolean {
 
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
-const DAY_MS = 24 * 60 * MINUTE_MS;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
 
 /**
  * Alle Einstellungen für myTischtennis und Cache, einmal beim Start gelesen.
@@ -50,6 +51,10 @@ export const config = {
         forceApiFailure:
             process.env.NODE_ENV !== "production" &&
             readBoolean("MYTT_FORCE_API_FAILURE", false),
+        // Nur Entwicklung: tut so, als leite myTischtennis auf /verify um (ohne echten Request).
+        forceChallenge:
+            process.env.NODE_ENV !== "production" &&
+            readBoolean("MYTT_FORCE_CHALLENGE", false),
         html: {
             timeoutMs: readNumber("MYTT_HTML_TIMEOUT_MS", 5 * SECOND_MS, 1),
             maxBytes: readNumber("MYTT_HTML_MAX_BYTES", 1_500_000, 1),
@@ -60,9 +65,10 @@ export const config = {
     },
 
     throttle: {
-        maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 4, 1)),
+        maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 2, 1)),
         // 150 ms (bis zu 6 bis 7 Requests pro Sekunde) hat trotz freiem Kontingent 429 ausgelöst.
-        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 300),
+        // Gleichmäßig und langsam wirkt weniger verdächtig als kurze Bursts.
+        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 1000),
         // Bremst myTischtennis mit 429, wächst das Intervall bis hierhin und schrumpft danach wieder.
         maxIntervalMs: readNumber("MYTT_MAX_INTERVAL_MS", 3000),
         queueTimeoutMs: readNumber("MYTT_QUEUE_TIMEOUT_MS", 20 * SECOND_MS, 1),
@@ -72,8 +78,13 @@ export const config = {
         maxBackgroundQueueLength: 200
     },
 
-    // 0 schaltet die Notbremse ab.
-    maxRequestsPerHour: readNumber("MYTT_MAX_REQUESTS_PER_HOUR", 1000),
+    // Eigenes Budget im rollenden 30 Minuten Fenster (myTischtennis erlaubt 360, wir nutzen höchstens ein
+    // Viertel). Hintergrundarbeit (Aktualisierungen, Logos, Canary) darf nur einen Anteil davon nutzen,
+    // der Rest bleibt für Cache Misses, auf die ein Nutzer wartet. 0 schaltet das Budget ab.
+    budget: {
+        per30Min: Math.floor(readNumber("MYTT_BUDGET_PER_30MIN", 90)),
+        backgroundShare: Math.min(1, readNumber("MYTT_BACKGROUND_SHARE", 0.6))
+    },
 
     // myTischtennis meldet sein Kontingent im `ratelimit` Header (aktuell 360 pro 30 Minuten).
     // Bleiben nur noch so viele übrig, pausieren wir bis zum Reset, statt in einen 429 zu laufen.
@@ -83,6 +94,18 @@ export const config = {
         baseBackoffMs: MINUTE_MS,
         maxBackoffMs: 10 * MINUTE_MS,
         serverErrorThreshold: Math.floor(readNumber("MYTT_BREAKER_5XX_THRESHOLD", 3, 1))
+    },
+
+    // myTischtennis leitet auf /verify (Captcha) um: Pause für beide Lanes, danach eine einzelne Probe.
+    // Jede erneute Challenge verdoppelt die Pause bis zum Maximum.
+    challenge: {
+        baseBackoffMs: readNumber("MYTT_CHALLENGE_PAUSE_MS", 6 * HOUR_MS, 1),
+        maxBackoffMs: readNumber("MYTT_CHALLENGE_MAX_PAUSE_MS", 24 * HOUR_MS, 1)
+    },
+
+    features: {
+        // Die TTR Schätzung erzeugt viele myTT Requests (Spielberichte), vorerst aus.
+        ttrEstimate: readBoolean("TTR_ESTIMATE_ENABLED", false)
     },
 
     // Täglicher Abgleich API gegen Webseite auf festen alten Saison Seiten. 0 = aus (lokal).

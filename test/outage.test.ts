@@ -6,7 +6,13 @@ import { fetchWithFallback } from "../src/sources/fetchWithFallback.js";
 import { searchKnownClubs, searchKnownPlayers } from "../src/sources/knownSearch.js";
 import { CircuitBreaker } from "../src/upstream/circuitBreaker.js";
 import { LocalRateLimitError } from "../src/upstream/errors.js";
-import { getUpstreamLane, parseRateLimitHeader } from "../src/upstream/rateLimiter.js";
+import {
+    getRateLimitStatus,
+    getUpstreamLane,
+    parseRateLimitHeader,
+    reportUpstreamResult,
+    resetBreakersForTests
+} from "../src/upstream/rateLimiter.js";
 
 function jsonResponse(status: number, headers: Record<string, string> = {}) {
     return new Response(null, { status, headers });
@@ -100,6 +106,54 @@ describe("myTischtennis quota and lanes", () => {
         breaker.pauseFor("upstream_quota", 1_800_000);
         assert.equal(breaker.remainingMs(), 600_000);
         assert.equal(breaker.isRateLimited(), true);
+    });
+});
+
+describe("429 handling per lane", () => {
+    it("pauses both lanes on a real quota 429 (with ratelimit header)", () => {
+        resetBreakersForTests();
+
+        reportUpstreamResult({
+            lane: "site",
+            status: 429,
+            rateLimitHeader: '"360-in-30min"; r=0; t=120'
+        });
+
+        const { breaker } = getRateLimitStatus();
+
+        assert.equal(breaker.site.state, "open");
+        assert.equal(breaker.api.state, "open");
+        assert.ok(breaker.api.retryAfterSeconds >= 118 && breaker.api.retryAfterSeconds <= 120);
+
+        resetBreakersForTests();
+    });
+
+    it("pauses only the lane of a 429 without ratelimit header", () => {
+        resetBreakersForTests();
+
+        reportUpstreamResult({ lane: "api", status: 429 });
+
+        const { breaker } = getRateLimitStatus();
+
+        assert.equal(breaker.api.state, "open");
+        assert.equal(breaker.site.state, "closed");
+
+        resetBreakersForTests();
+    });
+
+    it("pauses only one lane after repeated 5xx", () => {
+        resetBreakersForTests();
+
+        for (let i = 0; i < 3; i += 1) {
+            reportUpstreamResult({ lane: "api", status: 503 });
+        }
+
+        const { breaker } = getRateLimitStatus();
+
+        assert.equal(breaker.api.state, "open");
+        assert.equal(breaker.site.state, "closed");
+
+        resetBreakersForTests();
     });
 });
 

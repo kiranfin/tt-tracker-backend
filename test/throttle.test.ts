@@ -92,9 +92,17 @@ describe("Throttle", () => {
 });
 
 describe("RequestWindow", () => {
-    it("blocks once the hourly cap is reached and recovers after an hour", () => {
+    const WINDOW = 30 * 60 * 1000;
+
+    function create(budget: number, backgroundShare?: number) {
         const clock = { now: 0 };
-        const window = new RequestWindow(2, () => clock.now);
+        const window = new RequestWindow(budget, { backgroundShare, now: () => clock.now });
+
+        return { window, clock };
+    }
+
+    it("blocks once the budget is used up and recovers after the 30 minute window", () => {
+        const { window, clock } = create(2);
 
         window.record();
         window.record();
@@ -102,11 +110,47 @@ describe("RequestWindow", () => {
         assert.throws(
             () => window.assertAvailable(),
             (error: unknown) =>
-                error instanceof LocalRateLimitError && error.reason === "hourly_cap"
+                error instanceof LocalRateLimitError && error.reason === "budget_exhausted"
         );
 
-        clock.now += 60 * 60 * 1000 + 1;
+        clock.now += WINDOW + 1;
         assert.doesNotThrow(() => window.assertAvailable());
+    });
+
+    it("rolls: old requests fall out one by one", () => {
+        const { window, clock } = create(2);
+
+        window.record();
+        clock.now += 20 * 60 * 1000;
+        window.record();
+        clock.now += 11 * 60 * 1000;
+
+        assert.doesNotThrow(() => window.assertAvailable());
+        assert.equal(window.status().used, 1);
+    });
+
+    it("keeps a share of the budget for interactive requests", () => {
+        const { window } = create(10, 0.6);
+
+        for (let i = 0; i < 6; i += 1) {
+            window.assertAvailable("background");
+            window.record("background");
+        }
+
+        assert.throws(
+            () => window.assertAvailable("background"),
+            (error: unknown) =>
+                error instanceof LocalRateLimitError && error.reason === "budget_exhausted"
+        );
+        assert.equal(window.remainingForBackground(), 0);
+
+        // Die restlichen 4 gehören den Nutzern.
+        for (let i = 0; i < 4; i += 1) {
+            window.assertAvailable("interactive");
+            window.record("interactive");
+        }
+
+        assert.throws(() => window.assertAvailable("interactive"));
     });
 
     it("treats 0 as unlimited", () => {
@@ -116,7 +160,7 @@ describe("RequestWindow", () => {
             window.record();
         }
 
-        assert.doesNotThrow(() => window.assertAvailable());
+        assert.doesNotThrow(() => window.assertAvailable("background"));
         assert.equal(window.status().remaining, null);
     });
 });

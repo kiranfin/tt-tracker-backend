@@ -29,37 +29,14 @@ type AndroClubNrResolution = {
     source: AndroClubNrResolutionSource;
 };
 
-const ANDRO_RESOLVED_CLUB_NR_CACHE = new Map<
-    string,
-    {
-        clubNr: string;
-        expiresAt: number;
-    }
->();
-
-const ANDRO_RESOLVED_CLUB_NR_TTL_MS = 1000 * 60 * 60 * 24;
-
-function getCachedResolvedAndroClubNr(key: string) {
-    const cached = ANDRO_RESOLVED_CLUB_NR_CACHE.get(key);
-
-    if (!cached) {
-        return undefined;
-    }
-
-    if (cached.expiresAt <= Date.now()) {
-        ANDRO_RESOLVED_CLUB_NR_CACHE.delete(key);
-        return undefined;
-    }
-
-    return cached.clubNr;
-}
-
-function setCachedResolvedAndroClubNr(key: string, clubNr: string) {
-    ANDRO_RESOLVED_CLUB_NR_CACHE.set(key, {
-        clubNr,
-        expiresAt: Date.now() + ANDRO_RESOLVED_CLUB_NR_TTL_MS
-    });
-}
+/**
+ * Merkzettel für die aufgelöste Andro Vereinsnummer (click-TT Nummer zu Andro Nummer). Die Source
+ * Schicht hat keinen Cache, deshalb reicht der Service einen Speicher herein.
+ */
+export type ResolvedAndroClubNrStore = {
+    get: (organization: string, clubNumber: string) => string | undefined;
+    set: (organization: string, clubNumber: string, androClubNr: string) => void;
+};
 
 function getAndroAssociationPattern(organization: string) {
     return ANDRO_ASSOCIATION_PATTERNS[organization.toUpperCase()] ?? "all";
@@ -256,6 +233,7 @@ function getInitialAndroClubNrResolution(params: {
     organization: string;
     clubNumber: string;
     androClubNr?: string;
+    resolved?: ResolvedAndroClubNrStore;
 }): AndroClubNrResolution {
     const organization = params.organization.toUpperCase();
     const cacheKey = `${organization}:${params.clubNumber}`;
@@ -267,7 +245,7 @@ function getInitialAndroClubNrResolution(params: {
         };
     }
 
-    const cached = getCachedResolvedAndroClubNr(cacheKey);
+    const cached = params.resolved?.get(organization, params.clubNumber);
 
     if (cached) {
         return {
@@ -412,13 +390,18 @@ export async function getClubPlayersFromAndroRanking(params: {
     clubNumber: string;
     androClubNr?: string;
     clubName?: string;
+    resolved?: ResolvedAndroClubNrStore;
+    // Die Kandidatensuche (bis zu 8 weitere Abrufe nacheinander) nicht selbst machen, sondern dem
+    // Aufrufer melden, der sie im Hintergrund nachholt. Bis dahin kommt die unaufgelöste Antwort.
+    deferCandidateSearch?: () => void;
 }): Promise<ClubPlayersResponse> {
     const organization = params.organization.trim().toUpperCase();
 
     const initialResolution = getInitialAndroClubNrResolution({
         organization,
         clubNumber: params.clubNumber,
-        androClubNr: params.androClubNr
+        androClubNr: params.androClubNr,
+        resolved: params.resolved
     });
 
     const initial = await fetchAndroRankingRaw({
@@ -433,10 +416,7 @@ export async function getClubPlayersFromAndroRanking(params: {
             initialEntriesCount > 0 &&
             initialResolution.source !== "explicit"
         ) {
-            setCachedResolvedAndroClubNr(
-                `${organization}:${params.clubNumber}`,
-                initialResolution.clubNr
-            );
+            params.resolved?.set(organization, params.clubNumber, initialResolution.clubNr);
         }
 
         return normalizeAndroRankingResponse({
@@ -457,10 +437,7 @@ export async function getClubPlayersFromAndroRanking(params: {
         });
 
         if (getAndroEntriesCount(direct.raw) > 0) {
-            setCachedResolvedAndroClubNr(
-                `${organization}:${params.clubNumber}`,
-                params.clubNumber
-            );
+            params.resolved?.set(organization, params.clubNumber, params.clubNumber);
 
             return normalizeAndroRankingResponse({
                 value: direct.raw,
@@ -471,6 +448,19 @@ export async function getClubPlayersFromAndroRanking(params: {
                 resolutionSource: "direct"
             });
         }
+    }
+
+    if (params.deferCandidateSearch) {
+        params.deferCandidateSearch();
+
+        return normalizeAndroRankingResponse({
+            value: initial.raw,
+            organization,
+            clickttClubId: params.clubNumber,
+            androClubNr: initialResolution.clubNr,
+            sourcePath: initial.sourcePath,
+            resolutionSource: "unresolved"
+        });
     }
 
     const candidates = await findAndroClubNrCandidates({
@@ -489,10 +479,7 @@ export async function getClubPlayersFromAndroRanking(params: {
         });
 
         if (getAndroEntriesCount(candidateResult.raw) > 0) {
-            setCachedResolvedAndroClubNr(
-                `${organization}:${params.clubNumber}`,
-                candidate.clubNr
-            );
+            params.resolved?.set(organization, params.clubNumber, candidate.clubNr);
 
             return normalizeAndroRankingResponse({
                 value: candidateResult.raw,

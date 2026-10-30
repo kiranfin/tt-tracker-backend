@@ -6,6 +6,7 @@ import { writeJsonLog } from "../fileLogger.js";
 import { MailNotConfiguredError, sendAlertEmail } from "../mailer.js";
 import { getJsonFromMytt } from "../mytt/request.js";
 import { runInBackground } from "../upstream/priority.js";
+import { canRunBackgroundWork } from "../upstream/rateLimiter.js";
 import { fetchHtmlPage } from "../sources/html/fetchPage.js";
 import { getRouteDataFromHtml, type JsonRecord } from "../sources/html/remixContext.js";
 import { CANARY_PROBES, type CanaryProbe } from "./probes.js";
@@ -327,7 +328,13 @@ const canary = createCanary(defaultDeps);
 export const runCanary = canary.run;
 export const getLastCanaryReport = canary.lastReport;
 
-/** Startet den regelmäßigen Lauf, wenn CANARY_INTERVAL_HOURS gesetzt ist. */
+const MIN_INTERVAL_HOURS = 24;
+
+/**
+ * Startet den regelmäßigen Lauf, wenn CANARY_INTERVAL_HOURS gesetzt ist, höchstens täglich.
+ * Der Lauf wird ausgesetzt, solange myTischtennis den Server sperrt (Challenge), ein Breaker offen ist
+ * oder das Hintergrund Budget nicht für alle Proben reicht (zwei Abrufe pro Probe).
+ */
 export function startCanarySchedule() {
     const { intervalHours } = config.canary;
 
@@ -336,8 +343,15 @@ export function startCanarySchedule() {
     }
 
     setInterval(() => {
+        const needed = CANARY_PROBES.length * 2;
+
+        if (!canRunBackgroundWork(needed)) {
+            void writeJsonLog("canary_skipped", { reason: "upstream_busy_or_blocked", needed });
+            return;
+        }
+
         void runCanary().catch((error) => {
             void writeJsonLog("canary_error", { errorMessage: messageOf(error) });
         });
-    }, intervalHours * 60 * 60 * 1000).unref();
+    }, Math.max(intervalHours, MIN_INTERVAL_HOURS) * 60 * 60 * 1000).unref();
 }

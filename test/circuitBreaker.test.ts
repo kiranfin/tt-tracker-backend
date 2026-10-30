@@ -81,3 +81,98 @@ describe("CircuitBreaker", () => {
         assert.equal(breaker.remainingMs(), 0);
     });
 });
+
+describe("CircuitBreaker challenge (half-open)", () => {
+    const HOUR = 3_600_000;
+
+    function createChallengeBreaker() {
+        const clock = { now: 1_000_000 };
+
+        const breaker = new CircuitBreaker({
+            baseBackoffMs: 6 * HOUR,
+            maxBackoffMs: 24 * HOUR,
+            serverErrorThreshold: 1,
+            now: () => clock.now
+        });
+
+        return { breaker, clock };
+    }
+
+    it("pauses for 6 hours on the first challenge", () => {
+        const { breaker } = createChallengeBreaker();
+
+        breaker.reportChallenge();
+
+        assert.equal(breaker.remainingMs(), 6 * HOUR);
+        assert.equal(breaker.status().state, "open");
+        assert.equal(breaker.admit().allowed, false);
+    });
+
+    it("lets exactly one probe through after the pause", () => {
+        const { breaker, clock } = createChallengeBreaker();
+
+        breaker.reportChallenge();
+        clock.now += 6 * HOUR;
+
+        assert.equal(breaker.status().state, "half_open");
+
+        const first = breaker.admit();
+        const second = breaker.admit();
+
+        assert.deepEqual(first, { allowed: true, probe: true });
+        assert.equal(second.allowed, false);
+        assert.equal(breaker.challengeStatus().probes, 1);
+    });
+
+    it("doubles the pause when the probe meets the challenge again, capped at 24 hours", () => {
+        const { breaker, clock } = createChallengeBreaker();
+        const pauses: number[] = [];
+
+        for (let i = 0; i < 4; i += 1) {
+            breaker.reportChallenge();
+            pauses.push(breaker.remainingMs());
+            clock.now += breaker.remainingMs();
+
+            assert.deepEqual(breaker.admit(), { allowed: true, probe: true });
+        }
+
+        assert.deepEqual(pauses, [6 * HOUR, 12 * HOUR, 24 * HOUR, 24 * HOUR]);
+    });
+
+    it("counts a second challenge report during the pause only once", () => {
+        const { breaker } = createChallengeBreaker();
+
+        breaker.reportChallenge();
+        breaker.reportChallenge();
+
+        assert.equal(breaker.remainingMs(), 6 * HOUR);
+    });
+
+    it("closes after a successful probe and starts from 6 hours next time", () => {
+        const { breaker, clock } = createChallengeBreaker();
+
+        breaker.reportChallenge();
+        clock.now += 6 * HOUR;
+        breaker.admit();
+        breaker.reportProbeSuccess();
+
+        assert.deepEqual(breaker.admit(), { allowed: true, probe: false });
+        assert.equal(breaker.challengeStatus().active, false);
+
+        breaker.reportChallenge();
+
+        assert.equal(breaker.remainingMs(), 6 * HOUR);
+    });
+
+    it("allows the next probe after the first one was released", () => {
+        const { breaker, clock } = createChallengeBreaker();
+
+        breaker.reportChallenge();
+        clock.now += 6 * HOUR;
+        breaker.admit();
+        breaker.releaseProbe();
+
+        assert.deepEqual(breaker.admit(), { allowed: true, probe: true });
+    });
+});
+

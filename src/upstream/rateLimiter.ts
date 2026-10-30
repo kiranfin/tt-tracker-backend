@@ -33,7 +33,26 @@ const breakers: Record<UpstreamLane, CircuitBreaker> = {
     site: createBreaker("site")
 };
 
-const requestWindow = new RequestWindow(config.maxRequestsPerHour);
+// Challenge (/verify) gilt für die IP, nicht für eine Lane: ein gemeinsamer Breaker mit Probe Pflicht.
+const challengeBreaker = new CircuitBreaker({
+    ...config.challenge,
+    serverErrorThreshold: 1,
+    onOpen: (reason, pauseMs) => {
+        console.warn(
+            `myTischtennis verification challenge detected, all requests paused for ${Math.round(pauseMs / 60000)} min`
+        );
+
+        void writeJsonLog("mytt_challenge_detected", {
+            reason,
+            pauseMs,
+            ...challengeBreaker.challengeStatus()
+        });
+    }
+});
+
+const requestWindow = new RequestWindow(config.budget.per30Min, {
+    backgroundShare: config.budget.backgroundShare
+});
 
 const throttle = new Throttle(config.throttle);
 
@@ -86,6 +105,33 @@ function assertBreakerClosed(lane: UpstreamLane) {
 }
 
 /**
+ * Prüft die Challenge Sperre. Liefert true, wenn dieser Request die einzige Probe nach der
+ * Pause ist, sonst false. Wirft, solange die Pause läuft oder eine Probe schon unterwegs ist.
+ */
+function admitThroughChallenge(): boolean {
+    const admission = challengeBreaker.admit();
+
+    if (!admission.allowed) {
+        throw new LocalRateLimitError(admission.retryAfterMs, "upstream_challenge");
+    }
+
+    if (admission.probe) {
+        void writeJsonLog("mytt_challenge_probe", challengeBreaker.challengeStatus());
+    }
+
+    return admission.probe;
+}
+
+function assertStillAdmitted(probe: boolean) {
+    if (!challengeBreaker.stillAdmitted(probe)) {
+        throw new LocalRateLimitError(
+            Math.max(challengeBreaker.remainingMs(), 10_000),
+            "upstream_challenge"
+        );
+    }
+}
+
+/**
  * Wartet auf einen freien Upstream Slot und liefert die release Funktion, die nach dem Request
  * aufgerufen werden muss. Abgelehnt wird, wenn der Breaker der Lane offen ist, die Notbremse
  * greift oder die Warteschlange voll ist.
@@ -100,25 +146,37 @@ export async function acquireUpstreamSlot(options: {
 }): Promise<Release> {
     assertBreakerClosed(options.lane);
 
-    if (options.counted === false) {
-        return () => {};
-    }
+    const probe = admitThroughChallenge();
 
-    requestWindow.assertAvailable();
-
-    const release = await throttle.acquire(options.priority);
-
-    // Während des Wartens kann der Breaker aufgegangen sein.
     try {
-        assertBreakerClosed(options.lane);
+        if (options.counted === false) {
+            return () => {};
+        }
+
+        requestWindow.assertAvailable(options.priority);
+
+        const release = await throttle.acquire(options.priority);
+
+        // Während des Wartens kann ein Breaker aufgegangen sein.
+        try {
+            assertBreakerClosed(options.lane);
+            assertStillAdmitted(probe);
+        } catch (error) {
+            release();
+            throw error;
+        }
+
+        requestWindow.record(options.priority);
+
+        return release;
     } catch (error) {
-        release();
+        // Die Probe wurde nie gesendet: die nächste darf es versuchen.
+        if (probe) {
+            challengeBreaker.releaseProbe();
+        }
+
         throw error;
     }
-
-    requestWindow.record();
-
-    return release;
 }
 
 function logPaceChange(change: PaceChange | null, reason: "rate_limited" | "recovered") {
@@ -135,18 +193,46 @@ function logPaceChange(change: PaceChange | null, reason: "rate_limited" | "reco
 
 /** Meldet das Ergebnis eines Upstream Calls an den Breaker (auch für nicht gezählte Calls). */
 export function reportUpstreamResult(
-    result: UpstreamResult & { lane: UpstreamLane; rateLimitHeader?: string | null }
+    result: UpstreamResult & {
+        lane: UpstreamLane;
+        rateLimitHeader?: string | null;
+        // Weiterleitung auf /verify (Bot Schutz).
+        challenge?: boolean;
+    }
 ) {
-    // Ein 429 gilt für die ganze Seite, nicht nur für die API oder die Webseite.
+    if (result.challenge) {
+        challengeBreaker.reportChallenge();
+
+        return;
+    }
+
+    // Antwortet myTischtennis wieder normal, ist die Probe bestanden. Ein Netzwerkfehler sagt nichts.
+    if (challengeBreaker.challengeStatus().probeInFlight) {
+        if (result.status !== undefined) {
+            challengeBreaker.reportProbeSuccess();
+        } else if (result.networkError) {
+            challengeBreaker.releaseProbe();
+        }
+    }
+
     if (result.status === 429) {
         logPaceChange(throttle.slowDown(), "rate_limited");
 
-        for (const breaker of Object.values(breakers)) {
-            breaker.report(result);
-        }
+        const quota = parseRateLimitHeader(result.rateLimitHeader);
 
-        // Für den Status trotzdem merken, wie das Kontingent beim 429 stand.
-        lastQuota = parseRateLimitHeader(result.rateLimitHeader) ?? lastQuota;
+        if (quota) {
+            // Echtes Kontingent (360 pro 30 Minuten) gilt für die IP: beide Lanes bis zum Reset (t=).
+            const untilResetSeconds = Math.max(1, Math.ceil((quota.resetAt - Date.now()) / 1000));
+
+            for (const breaker of Object.values(breakers)) {
+                breaker.report({ ...result, retryAfterHeader: String(untilResetSeconds) });
+            }
+
+            lastQuota = quota;
+        } else {
+            // Ohne ratelimit Header ist es kein Kontingent, die andere Lane läuft weiter.
+            breakers[result.lane].report(result);
+        }
 
         return;
     }
@@ -171,6 +257,35 @@ export function reportUpstreamResult(
             breaker.pauseFor("upstream_quota", quota.resetAt - Date.now());
         }
     }
+}
+
+/** Nur für Tests: alle Breaker zurück auf geschlossen. */
+export function resetBreakersForTests() {
+    challengeBreaker.reset();
+
+    for (const breaker of Object.values(breakers)) {
+        breaker.reset();
+    }
+}
+
+/**
+ * Darf Hintergrundarbeit jetzt noch `requests` Upstream Requests anstoßen? Nein, wenn eine Challenge
+ * läuft, ein Breaker offen ist oder das Budget für Hintergrund nicht mehr reicht.
+ */
+export function canRunBackgroundWork(requests = 1) {
+    if (challengeBreaker.challengeStatus().active) {
+        return false;
+    }
+
+    if (Object.values(breakers).some((breaker) => breaker.remainingMs() > 0)) {
+        return false;
+    }
+
+    return requestWindow.remainingForBackground() >= requests;
+}
+
+export function getChallengeStatus() {
+    return challengeBreaker.challengeStatus();
 }
 
 export function getRateLimitStatus() {

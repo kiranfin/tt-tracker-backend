@@ -7,11 +7,14 @@ import { clubRoutes } from "./routes/clubRoutes.js";
 import { leagueRoutes } from "./routes/leagueRoutes.js";
 import { meetingRoutes } from "./routes/meetingRoutes.js";
 import { playerRoutes } from "./routes/playerRoutes.js";
+import { snapshotRoutes } from "./routes/snapshotRoutes.js";
 import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
 import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
-import { getRateLimitStatus } from "./upstream/rateLimiter.js";
+import { getBackgroundJobStatus } from "./services/jobs.js";
+import { getDataStatus } from "./services/status.js";
+import { getChallengeStatus, getRateLimitStatus } from "./upstream/rateLimiter.js";
 import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
 import { closeStore, getStoreDb, getStoreStatus } from "./store/db.js";
 import { getUpstreamUsage } from "./upstream/tracker.js";
@@ -138,7 +141,10 @@ app.addHook("preHandler", async (request, reply) => {
 
 app.get("/debug/status", async () => {
     return {
+        challenge: getChallengeStatus(),
+        backgroundJobs: getBackgroundJobStatus(),
         rateLimit: getRateLimitStatus(),
+        data: getDataStatus(),
         cache: getCacheStatus(),
         store: getStoreStatus(),
         upstream: getUpstreamUsage(),
@@ -154,6 +160,7 @@ await app.register(clubRoutes);
 await app.register(leagueRoutes);
 await app.register(meetingRoutes);
 await app.register(myttSessionRoutes);
+await app.register(snapshotRoutes);
 await app.register(teamRoutes);
 await app.register(eventRoutes);
 await app.register(adminRoutes);
