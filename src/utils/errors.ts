@@ -8,6 +8,7 @@ import {
 } from "../myttSessionStore.js";
 import {
     LocalRateLimitError,
+    UpstreamChallengeError,
     UpstreamDisabledError,
     UpstreamError,
     UpstreamFormatError,
@@ -18,6 +19,9 @@ import { UserNotFoundError } from "../authStore.js";
 
 const UPSTREAM_UNAVAILABLE_MESSAGE =
     "myTischtennis hat gerade eine Störung und liefert diese Daten nicht. Bitte später erneut versuchen.";
+
+const UPSTREAM_BLOCKED_MESSAGE =
+    "myTischtennis sperrt den Zugriff des Servers gerade (Verifizierung). Es werden vorerst nur gespeicherte Daten geliefert.";
 
 export function handleApiError(error: unknown, reply: FastifyReply) {
     // Vor ZodError: ein geändertes Format bei myTischtennis ist kein Fehler des Clients.
@@ -107,6 +111,27 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
                 message: error.delegated
                     ? "Die freigegebene myTischtennis-Session ist abgelaufen."
                     : "Deine myTischtennis-Session ist abgelaufen. Bitte Cookie erneuern."
+            }
+        });
+    }
+
+    // Challenge: myTischtennis hat die Server IP auf /verify umgeleitet, kein Rate Limit.
+    if (
+        error instanceof UpstreamChallengeError ||
+        (error instanceof LocalRateLimitError && error.reason === "upstream_challenge")
+    ) {
+        const retryAfterSeconds =
+            error instanceof LocalRateLimitError ? Math.ceil(error.retryAfterMs / 1000) : undefined;
+
+        if (retryAfterSeconds !== undefined) {
+            reply.header("Retry-After", String(retryAfterSeconds));
+        }
+
+        return reply.code(503).send({
+            error: {
+                code: "UPSTREAM_BLOCKED",
+                message: UPSTREAM_BLOCKED_MESSAGE,
+                ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {})
             }
         });
     }

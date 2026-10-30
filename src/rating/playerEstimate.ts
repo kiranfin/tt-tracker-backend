@@ -11,7 +11,11 @@ import {
     saveOpponentRatings,
     type OpponentRatingRow
 } from "../store/opponentRatingStore.js";
-import { LocalRateLimitError, UpstreamRateLimitError } from "../upstream/errors.js";
+import {
+    LocalRateLimitError,
+    UpstreamChallengeError,
+    UpstreamRateLimitError
+} from "../upstream/errors.js";
 import { runInBackground } from "../upstream/priority.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 import { buildTimeline, type EstimatedEvent, type RatedSingle } from "./estimate.js";
@@ -55,7 +59,11 @@ export type PlayerTtrEstimate = {
  * überdecken. Lieber abbrechen, dann liefert der Cache die vorige Schätzung als stale.
  */
 export function isTemporarilyBlocked(error: unknown) {
-    return error instanceof LocalRateLimitError || error instanceof UpstreamRateLimitError;
+    return (
+        error instanceof LocalRateLimitError ||
+        error instanceof UpstreamRateLimitError ||
+        error instanceof UpstreamChallengeError
+    );
 }
 
 async function mapWithConcurrency<T, R>(

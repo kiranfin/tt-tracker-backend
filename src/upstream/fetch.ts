@@ -1,9 +1,18 @@
 import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
-import { UpstreamDisabledError, UpstreamError } from "./errors.js";
+import {
+    UpstreamChallengeError,
+    UpstreamDisabledError,
+    UpstreamError
+} from "./errors.js";
 import { getUpstreamPriority } from "./priority.js";
-import { acquireUpstreamSlot, getUpstreamLane, reportUpstreamResult } from "./rateLimiter.js";
+import {
+    acquireUpstreamSlot,
+    getUpstreamLane,
+    parseRateLimitHeader,
+    reportUpstreamResult
+} from "./rateLimiter.js";
 import { trackUpstreamRequest } from "./tracker.js";
 
 export type UpstreamRequest = {
@@ -16,7 +25,7 @@ export type UpstreamRequest = {
     timeoutMs: number;
     // Abbruch, wenn die Antwort größer ist (nur Webseiten).
     maxBytes?: number;
-    // /api/ttr/* läuft über die Session des Users und belastet das gemeinsame Limit nicht.
+    // Standard true. false umgeht Warteschlange und Notbremse und ist nur noch für Ausnahmen gedacht.
     countTowardsLocalRateLimit?: boolean;
     logExtra?: Record<string, unknown>;
 };
@@ -24,10 +33,119 @@ export type UpstreamRequest = {
 export type UpstreamTextResponse = {
     response: Response;
     bodyText: string;
+    // URL nach allen Weiterleitungen.
+    finalUrl: string;
+};
+
+const MAX_REDIRECTS = 3;
+
+type FetchOutcome = {
+    response: Response | null;
+    finalUrl: string;
+    // Erstes Weiterleitungsziel (Location oder x-remix-redirect), auch wenn es nicht /verify ist.
+    redirectLocation?: string;
+    // Ziel, wenn myTischtennis auf die Verifizierungsseite leitet.
+    challengeLocation?: string;
+    redirects: number;
 };
 
 function isCounted(request: UpstreamRequest) {
-    return request.countTowardsLocalRateLimit ?? !request.path.startsWith("/api/ttr/");
+    return request.countTowardsLocalRateLimit ?? true;
+}
+
+function isVerifyLocation(location: string, base: URL) {
+    try {
+        const { pathname } = new URL(location, base);
+
+        return pathname === "/verify" || pathname.startsWith("/verify/");
+    } catch {
+        return false;
+    }
+}
+
+function isRedirectStatus(status: number) {
+    return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+/**
+ * Folgt Weiterleitungen selbst (höchstens 3, nur gleiche Origin), damit eine Umleitung auf /verify
+ * erkannt wird, bevor die Verifizierungsseite mit ihrem 429 wie ein Rate Limit aussieht.
+ * Bei Challenge liefert sie response=null (bzw. die Weiterleitung) und challengeLocation.
+ */
+async function fetchFollowingRedirects(request: UpstreamRequest): Promise<FetchOutcome> {
+    if (config.upstream.forceChallenge) {
+        return {
+            response: null,
+            finalUrl: request.url.toString(),
+            redirectLocation: "/verify?forced=1",
+            challengeLocation: "/verify?forced=1",
+            redirects: 1
+        };
+    }
+
+    const signal = AbortSignal.timeout(request.timeoutMs);
+
+    let url = request.url;
+    let method = request.method;
+    let body = request.body;
+    let redirectLocation: string | undefined;
+    let redirects = 0;
+
+    while (true) {
+        const response = await fetch(url, {
+            method,
+            headers: request.headers,
+            body,
+            signal,
+            redirect: "manual"
+        });
+
+        // Remix beantwortet einen Redirect auf `?_data` Requests mit 204 und diesem Header.
+        const remixRedirect = response.headers.get("x-remix-redirect");
+        const location = remixRedirect ?? (isRedirectStatus(response.status) ? response.headers.get("location") : null);
+
+        if (location) {
+            redirectLocation ??= location;
+
+            if (isVerifyLocation(location, url)) {
+                await response.body?.cancel().catch(() => undefined);
+
+                return {
+                    response,
+                    finalUrl: url.toString(),
+                    redirectLocation,
+                    challengeLocation: location,
+                    redirects
+                };
+            }
+        }
+
+        if (!isRedirectStatus(response.status) || !location) {
+            return { response, finalUrl: url.toString(), redirectLocation, redirects };
+        }
+
+        await response.body?.cancel().catch(() => undefined);
+
+        redirects += 1;
+
+        if (redirects > MAX_REDIRECTS) {
+            throw new UpstreamError(`Upstream redirected more than ${MAX_REDIRECTS} times`);
+        }
+
+        const next = new URL(location, url);
+
+        if (next.origin !== url.origin) {
+            throw new UpstreamError(`Upstream redirected to another origin (${next.origin})`);
+        }
+
+        // Wie im Browser: 303 und POST nach 301/302 werden zu GET ohne Body.
+        if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")) {
+            method = "GET";
+            body = undefined;
+        }
+
+        url = next;
+    }
 }
 
 async function readBodyLimited(response: Response, maxBytes: number): Promise<string> {
@@ -114,27 +232,30 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
     let response: Response | null = null;
 
     try {
-        response = await fetch(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: request.body,
-            signal: AbortSignal.timeout(request.timeoutMs)
-        });
+        const outcome = await fetchFollowingRedirects(request);
+
+        response = outcome.response;
 
         const durationMs = Date.now() - startedAt;
-        const retryAfterHeader = response.headers.get("retry-after");
-        const rateLimitHeader = response.headers.get("ratelimit");
+        const retryAfterHeader = response?.headers.get("retry-after") ?? null;
+        const rateLimitHeader = response?.headers.get("ratelimit") ?? null;
+        const quota = parseRateLimitHeader(rateLimitHeader);
 
         void writeJsonLog("mytt_upstream_request", {
             ...logBase,
-            status: response.status,
-            ok: response.ok,
+            status: response?.status,
+            ok: response?.ok ?? false,
             durationMs,
             localRateLimitCounted: counted,
-            // Nur bei 429: zeigt, welches Limit von myTischtennis gegriffen hat.
-            ...(response.status === 429
-                ? { retryAfter: retryAfterHeader, rateLimit: rateLimitHeader }
-                : {}),
+            // Roh und geparst: zeigt, wie viel Kontingent myTischtennis noch zugesteht.
+            rateLimit: rateLimitHeader,
+            rateLimitRemaining: quota?.remaining,
+            rateLimitResetAt: quota ? new Date(quota.resetAt).toISOString() : undefined,
+            retryAfter: retryAfterHeader,
+            redirectLocation: outcome.redirectLocation,
+            redirects: outcome.redirects || undefined,
+            challenge: outcome.challengeLocation ? true : undefined,
+            simulated: response ? undefined : true,
             ...request.logExtra
         });
 
@@ -142,25 +263,38 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
             method: request.method,
             path: request.path,
             url,
-            status: response.status,
-            ok: response.ok,
+            status: response?.status,
+            ok: response?.ok ?? false,
             durationMs
         });
 
+        if (outcome.challengeLocation) {
+            reportUpstreamResult({ lane, challenge: true });
+
+            throw new UpstreamChallengeError(outcome.challengeLocation);
+        }
+
+        // Ohne Challenge hat fetchFollowingRedirects immer eine Response geliefert.
+        const finalResponse = response as Response;
+
         reportUpstreamResult({
             lane,
-            status: response.status,
+            status: finalResponse.status,
             retryAfterHeader,
             rateLimitHeader
         });
 
         const bodyText =
             request.maxBytes !== undefined
-                ? await readBodyLimited(response, request.maxBytes)
-                : await response.text();
+                ? await readBodyLimited(finalResponse, request.maxBytes)
+                : await finalResponse.text();
 
-        return { response, bodyText };
+        return { response: finalResponse, bodyText, finalUrl: outcome.finalUrl };
     } catch (error) {
+        if (error instanceof UpstreamChallengeError) {
+            throw error;
+        }
+
         if (response) {
             // Header kamen an, der Body nicht rechtzeitig: gleiche Behandlung wie ein Timeout vor der Antwort.
             // Alles andere (z.B. "too large") ist schon ein UpstreamError und bleibt unverändert.

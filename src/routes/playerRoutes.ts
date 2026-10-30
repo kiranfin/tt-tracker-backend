@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { getRequiredAppUserId } from "../appUser.js";
 import { readThrough, type ReadThroughResult } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
+import { config } from "../config.js";
 import {
     getPlayerHeadToHead,
     getPlayerTtr,
@@ -810,6 +811,16 @@ export async function playerRoutes(app: FastifyInstance) {
 
     // Geschätzter TTR und Verlauf aus öffentlichen Spielberichten, ohne myTischtennis Login.
     app.get("/api/players/:nuid/ttr-estimate", async (request, reply) => {
+        // Ein kalter Lauf erzeugt dutzende myTT Requests, deshalb vorerst abgeschaltet.
+        if (!config.features.ttrEstimate) {
+            return reply.code(404).send({
+                error: {
+                    code: "FEATURE_DISABLED",
+                    message: "Die TTR-Schätzung ist derzeit deaktiviert."
+                }
+            });
+        }
+
         try {
             const { nuid: rawNuid } = request.params as { nuid: string };
             const nuid = normalizeNuid(rawNuid);

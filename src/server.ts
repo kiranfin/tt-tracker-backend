@@ -11,7 +11,7 @@ import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
 import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
-import { getRateLimitStatus } from "./upstream/rateLimiter.js";
+import { getChallengeStatus, getRateLimitStatus } from "./upstream/rateLimiter.js";
 import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
 import { closeStore, getStoreDb, getStoreStatus } from "./store/db.js";
 import { getUpstreamUsage } from "./upstream/tracker.js";
@@ -138,6 +138,7 @@ app.addHook("preHandler", async (request, reply) => {
 
 app.get("/debug/status", async () => {
     return {
+        challenge: getChallengeStatus(),
         rateLimit: getRateLimitStatus(),
         cache: getCacheStatus(),
         store: getStoreStatus(),

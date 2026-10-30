@@ -117,9 +117,10 @@ npm install
 Then start the backend again:
 
 ```bash
-npm run build
 npm run start
 ```
+
+`npm run start` builds `dist/` first (`prestart`), so a `git pull` can no longer leave the server running an old build.
 
 ---
 

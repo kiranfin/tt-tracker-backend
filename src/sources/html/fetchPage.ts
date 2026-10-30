@@ -29,7 +29,7 @@ export async function fetchHtmlPageWithUrl(params: {
         url.searchParams.set(key, value);
     });
 
-    const { response, bodyText } = await fetchUpstreamText({
+    const { response, bodyText, finalUrl } = await fetchUpstreamText({
         method: "GET",
         url,
         path: params.path,
@@ -55,5 +55,5 @@ export async function fetchHtmlPageWithUrl(params: {
         );
     }
 
-    return { html: bodyText, finalUrl: response.url || url.toString() };
+    return { html: bodyText, finalUrl };
 }
