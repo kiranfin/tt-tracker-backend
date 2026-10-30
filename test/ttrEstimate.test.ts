@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildTimeline, type RatedSingle } from "../src/rating/estimate.js";
 import { expectedResult, kFactor, ratingChange } from "../src/rating/formula.js";
-import { extractPlayerSingles } from "../src/rating/playerMatches.js";
-import { isTemporarilyBlocked, planMeetingScan } from "../src/rating/playerEstimate.js";
+import { extractPlayerSingles, getPlayerSide } from "../src/rating/playerMatches.js";
+import { isTemporarilyBlocked, planMeetingScan, prioritizeMeetings } from "../src/rating/playerEstimate.js";
 import { LocalRateLimitError, UpstreamError, UpstreamRateLimitError } from "../src/upstream/errors.js";
 import type { MeetingLiveData } from "../src/schemas.js";
 
@@ -192,5 +192,43 @@ describe("planMeetingScan", () => {
 
         assert.equal(plan.toLoad.length, 0);
         assert.equal(plan.pending, 6);
+    });
+});
+
+describe("getPlayerSide", () => {
+    it("finds the side of the player, also in doubles and walkovers", () => {
+        assert.equal(getPlayerSide(MEETING, "NU4"), "home");
+        assert.equal(getPlayerSide(MEETING, "nu5"), "guest");
+        assert.equal(getPlayerSide(MEETING, "NU999"), null);
+    });
+});
+
+describe("prioritizeMeetings", () => {
+    // Neueste zuerst. Eigene Mannschaft ist "own", die anderen sind "x1" bis "x4".
+    const meeting = (id: string, home: string | null, away: string | null) => ({ id, homeTeamId: home, awayTeamId: away });
+    const meetings = [
+        meeting("m1", "x1", "x2"),
+        meeting("m2", "own", "x3"),
+        meeting("m3", "x2", "x4"),
+        meeting("m4", "x1", "own"),
+        meeting("m5", "x3", "x4"),
+        meeting("m6", null, null)
+    ];
+
+    it("keeps the newest-first order while the team is unknown", () => {
+        assert.deepEqual(prioritizeMeetings(meetings, new Set(), 1), meetings);
+    });
+
+    it("puts own team meetings first and limits the other teams to the newest ones", () => {
+        const ids = prioritizeMeetings(meetings, new Set(["own"]), 2).map((item) => item.id);
+
+        // m6 hat keine Mannschaftskennung und zählt als eigenes Spiel.
+        assert.deepEqual(ids, ["m2", "m4", "m6", "m1", "m3"]);
+    });
+
+    it("drops all other team meetings with a limit of zero", () => {
+        const ids = prioritizeMeetings(meetings, new Set(["own"]), 0).map((item) => item.id);
+
+        assert.deepEqual(ids, ["m2", "m4", "m6"]);
     });
 });

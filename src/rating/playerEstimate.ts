@@ -16,7 +16,7 @@ import { runInBackground } from "../upstream/priority.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 import { buildTimeline, type EstimatedEvent, type RatedSingle } from "./estimate.js";
 import { BASE_K } from "./formula.js";
-import { extractPlayerSingles, type PlayerSingle } from "./playerMatches.js";
+import { extractPlayerSingles, getPlayerSide, type PlayerSingle } from "./playerMatches.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -101,6 +101,41 @@ export function planMeetingScan<T extends { id: string }>(
     return { fromStore, toLoad, pending: missing.length - toLoad.length };
 }
 
+export type PastMeeting = {
+    id: string;
+    timestamp: number;
+    homeTeamId: string | null;
+    awayTeamId: string | null;
+};
+
+/**
+ * Welche Spiele des Vereins für den Spieler infrage kommen, in der Reihenfolge, in der sie geladen werden.
+ * Ist seine Mannschaft noch unbekannt, bleibt es bei neueste zuerst. Sonst kommen ihre Spiele zuerst
+ * (vollständig), danach nur die neuesten `maxOtherTeam` der anderen Mannschaften, denn dort taucht er
+ * höchstens als Ersatz auf. Spiele ohne Mannschaftskennung zählen sicherheitshalber als seine eigenen.
+ */
+export function prioritizeMeetings<T extends Pick<PastMeeting, "homeTeamId" | "awayTeamId">>(
+    candidates: T[],
+    ownTeamIds: ReadonlySet<string>,
+    maxOtherTeam: number
+): T[] {
+    if (ownTeamIds.size === 0) {
+        return candidates;
+    }
+
+    const own: T[] = [];
+    const other: T[] = [];
+
+    for (const meeting of candidates) {
+        const ids = [meeting.homeTeamId, meeting.awayTeamId].filter((id): id is string => id !== null);
+        const isOwn = ids.length === 0 || ids.some((id) => ownTeamIds.has(id));
+
+        (isOwn ? own : other).push(meeting);
+    }
+
+    return [...own, ...other.slice(0, Math.max(0, maxOtherTeam))];
+}
+
 // Vergangene Berichte, die nicht abgeschlossen oder nicht ladbar sind (verlegt, noch nicht eingetragen).
 // Sie würden sonst bei jeder Anfrage das Budget der neuesten Berichte aufbrauchen und die älteren blockieren.
 const UNFINISHED_RETRY_MS = 60 * 60 * 1000;
@@ -127,14 +162,20 @@ function meetingTimestamp(meeting: Record<string, unknown>) {
     return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function teamId(value: unknown) {
+    return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
+
 /** Vergangene Spiele des Vereins, neueste zuerst. */
-function getPastMeetingIds(schedule: Parameters<typeof getClubScheduleMeetings>[0], now: number) {
+function getPastMeetingIds(schedule: Parameters<typeof getClubScheduleMeetings>[0], now: number): PastMeeting[] {
     return getClubScheduleMeetings(schedule)
         .map((meeting) => ({
             id: meeting.meeting_id === null || meeting.meeting_id === undefined ? "" : String(meeting.meeting_id),
-            timestamp: meetingTimestamp(meeting)
+            timestamp: meetingTimestamp(meeting),
+            homeTeamId: teamId(meeting.team_home_id),
+            awayTeamId: teamId(meeting.team_away_id)
         }))
-        .filter((item): item is { id: string; timestamp: number } => item.id !== "" && item.timestamp !== null && item.timestamp < now)
+        .filter((item): item is PastMeeting => item.id !== "" && item.timestamp !== null && item.timestamp < now)
         .sort((left, right) => right.timestamp - left.timestamp);
 }
 
@@ -287,19 +328,42 @@ export async function estimatePlayerTtr(params: {
         .slice(0, TTR_ESTIMATE.MAX_MEETINGS)
         .filter((meeting) => !isSkippedForNow(meeting.id, now));
 
-    const plan = planMeetingScan(candidates, hasStoredMeeting, TTR_ESTIMATE.MAX_NEW_MEETINGS);
-    const scanned = [...plan.fromStore, ...plan.toLoad];
-    const loading = new Set(plan.toLoad.map((meeting) => meeting.id));
+    // 1. Abgelegte Berichte kosten keinen Upstream Request. Daran erkennt man die Mannschaft(en) des Spielers.
+    const stored = candidates.filter((meeting) => hasStoredMeeting(meeting.id));
+    const ownTeamIds = new Set<string>();
 
-    const reports = await mapWithConcurrency(scanned, TTR_ESTIMATE.CONCURRENCY, async (meeting) => {
-        const isNew = loading.has(meeting.id);
+    const storedReports = await mapWithConcurrency(stored, TTR_ESTIMATE.CONCURRENCY, async (meeting) => {
+        try {
+            const report = await readMeeting(meeting.id);
+            const data = report.value.data;
 
-        const read = async () => {
+            if (!data) return [];
+
+            const side = getPlayerSide(data, params.nuid);
+            const ownTeamId = side === "home" ? meeting.homeTeamId : side === "guest" ? meeting.awayTeamId : null;
+
+            if (ownTeamId) ownTeamIds.add(ownTeamId);
+
+            return extractPlayerSingles(data, meeting.id, params.nuid);
+        } catch (error) {
+            if (isTemporarilyBlocked(error)) throw error;
+
+            return [];
+        }
+    });
+
+    // 2. Fehlende Berichte: erst die Spiele seiner Mannschaft, dann nur wenige der anderen, höchstens
+    // MAX_NEW_MEETINGS pro Anfrage.
+    const ordered = prioritizeMeetings(candidates, ownTeamIds, TTR_ESTIMATE.MAX_OTHER_TEAM_MEETINGS);
+    const plan = planMeetingScan(ordered, hasStoredMeeting, TTR_ESTIMATE.MAX_NEW_MEETINGS);
+
+    const loadedReports = await mapWithConcurrency(plan.toLoad, TTR_ESTIMATE.CONCURRENCY, (meeting) =>
+        runInBackground(async () => {
             try {
                 const report = await readMeeting(meeting.id);
 
                 // Nicht abgelegt heißt nicht abgeschlossen: nicht bei jeder Anfrage erneut versuchen.
-                if (isNew && !hasStoredMeeting(meeting.id)) {
+                if (!hasStoredMeeting(meeting.id)) {
                     unfinishedMeetings.set(meeting.id, now + UNFINISHED_RETRY_MS);
                 }
 
@@ -307,19 +371,15 @@ export async function estimatePlayerTtr(params: {
             } catch (error) {
                 if (isTemporarilyBlocked(error)) throw error;
 
-                if (isNew) {
-                    unfinishedMeetings.set(meeting.id, now + UNFINISHED_RETRY_MS);
-                }
+                unfinishedMeetings.set(meeting.id, now + UNFINISHED_RETRY_MS);
 
                 return [];
             }
-        };
+        })
+    );
 
-        // Abgelegte Berichte kosten keinen Upstream Request, nur neue laufen als Hintergrundarbeit.
-        return isNew ? runInBackground(read) : read();
-    });
-
-    const singles = reports.flat();
+    const scanned = [...stored, ...plan.toLoad];
+    const singles = [...storedReports, ...loadedReports].flat();
     const opponents = await loadOpponentRatings(singles);
 
     const rated: RatedSingle[] = [];

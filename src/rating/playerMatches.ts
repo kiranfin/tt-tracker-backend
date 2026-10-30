@@ -37,6 +37,28 @@ function asString(value: unknown) {
 }
 
 /**
+ * Auf welcher Seite der Spieler in diesem Bericht gespielt hat (Einzel oder Doppel, auch kampflos), oder
+ * null, wenn er nicht dabei war. Daran erkennt man seine Mannschaft.
+ */
+export function getPlayerSide(meeting: MeetingLiveData, nuid: string): "home" | "guest" | null {
+    const wanted = normalizePlayerId(nuid);
+    const isPlayer = (player: MeetingPlayer | null | undefined) =>
+        player?.person_id ? normalizePlayerId(player.person_id) === wanted : false;
+
+    for (const match of meeting.match ?? []) {
+        if (isPlayer(match.mm_player11) || isPlayer(match.mm_player12)) {
+            return "home";
+        }
+
+        if (isPlayer(match.mm_player21) || isPlayer(match.mm_player22)) {
+            return "guest";
+        }
+    }
+
+    return null;
+}
+
+/**
  * Alle gewerteten Einzel eines Spielers aus einem Spielbericht. Doppel, kampflose Spiele und
  * Spiele ohne eindeutiges Ergebnis fallen weg.
  */
