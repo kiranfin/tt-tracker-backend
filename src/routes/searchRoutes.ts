@@ -1,10 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
-import { searchPlayers, searchClubs } from "../mytt/index.js";
-import { searchKnownClubs, searchKnownPlayers } from "../sources/knownSearch.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+import { getClubSearch, getPlayerSearch } from "../services/search.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 
 function parseSearchParams(query: {
     q?: string;
@@ -23,111 +19,47 @@ function parseSearchParams(query: {
             : 8;
 
     return {
-        q,
+        query: q,
         page: safePage,
         pagesize: safePagesize
     };
 }
 
-// Antwort aus der Notfall Suche (nur bereits bekannte Spieler oder Vereine).
-const KNOWN_RESULTS_META = {
-    source: "stale",
-    origin: "upstream",
-    fetchedAt: null,
-    fallback: "known_results"
-} as const;
+type SearchQuery = { q?: string; page?: string; pagesize?: string };
 
 export async function searchRoutes(app: FastifyInstance) {
     app.get("/api/search/players", async (request, reply) => {
-        const { q, page, pagesize } = parseSearchParams(
-            request.query as {
-                q?: string;
-                page?: string;
-                pagesize?: string;
-            }
-        );
+        const params = parseSearchParams(request.query as SearchQuery);
 
-        if (q.length < 3) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "Bitte mindestens 3 Zeichen eingeben."
-                }
-            });
+        if (params.query.length < 3) {
+            return sendInvalidInput(reply, "Bitte mindestens 3 Zeichen eingeben.");
         }
 
         try {
-            const result = await readThrough({
-                key: `players:${q.toLowerCase()}:${page}:${pagesize}`,
-                ttlMs: CACHE_TTL.PLAYER_SEARCH,
-                load: () =>
-                    searchPlayers({
-                        query: q,
-                        page,
-                        pagesize
-                    })
-            });
+            const { value, meta } = await getPlayerSearch(params, (error) =>
+                request.log.error(error)
+            );
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
-            request.log.error(error);
-
-            const known = searchKnownPlayers({ query: q, page, pagesize });
-
-            if (known.results.length > 0) {
-                return { data: known, meta: KNOWN_RESULTS_META };
-            }
-
             return handleApiError(error, reply);
         }
     });
 
     app.get("/api/search/clubs", async (request, reply) => {
-        const { q, page, pagesize } = parseSearchParams(
-            request.query as {
-                q?: string;
-                page?: string;
-                pagesize?: string;
-            }
-        );
+        const params = parseSearchParams(request.query as SearchQuery);
 
-        if (q.length < 3) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "Bitte mindestens 3 Zeichen eingeben."
-                }
-            });
+        if (params.query.length < 3) {
+            return sendInvalidInput(reply, "Bitte mindestens 3 Zeichen eingeben.");
         }
 
         try {
-            const result = await readThrough({
-                key: `clubs:${q.toLowerCase()}:${page}:${pagesize}`,
-                ttlMs: CACHE_TTL.CLUB_SEARCH,
-                load: () =>
-                    searchClubs({
-                        query: q,
-                        page,
-                        pagesize
-                    })
-            });
+            const { value, meta } = await getClubSearch(params, (error) =>
+                request.log.error(error)
+            );
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
-            request.log.error(error);
-
-            const known = searchKnownClubs({ query: q, page, pagesize });
-
-            if (known.results.length > 0) {
-                return { data: known, meta: KNOWN_RESULTS_META };
-            }
-
             return handleApiError(error, reply);
         }
     });

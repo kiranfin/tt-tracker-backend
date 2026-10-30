@@ -60,6 +60,13 @@ export class ResilientCache {
         this.evict();
     }
 
+    /** Frischer Wert ohne Load, z.B. für kleine Merkzettel wie die aufgelöste Andro Vereinsnummer. */
+    peek<T>(key: string): T | undefined {
+        const entry = this.entries.get(key);
+
+        return entry && this.now() <= entry.expiresAt ? (entry.value as T) : undefined;
+    }
+
     async readThrough<T>(params: {
         key: string;
         ttlMs: CacheTtl<T>;

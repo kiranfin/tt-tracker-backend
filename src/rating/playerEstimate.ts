@@ -1,7 +1,7 @@
 import { TTR_ESTIMATE } from "../constants.js";
-import { getClubScheduleMeetings, readClubSchedule, readMeeting } from "../mytt/cachedReads.js";
-import { readClubPlayers } from "../mytt/clubPlayersCache.js";
-import { lookupPublicPlayer } from "../mytt/playerLookup.js";
+import { getClubPlayerList, getClubScheduleData, getClubScheduleMeetings } from "../services/club.js";
+import { getMeeting } from "../services/meeting.js";
+import { lookupPublicPlayer } from "../services/rating.js";
 import { normalizePlayerId, toPublicRating, type PlayerRating } from "../mytt/rating.js";
 import { asNullableNumber } from "../mytt/values.js";
 import { hasStoredMeeting } from "../store/meetingStore.js";
@@ -230,7 +230,7 @@ async function loadOpponentRatings(singles: PlayerSingle[]) {
     await mapWithConcurrency(wanted, TTR_ESTIMATE.CONCURRENCY, ([, club]) =>
         runInBackground(async () => {
             try {
-                const list = await readClubPlayers(club);
+                const list = await getClubPlayerList(club);
 
                 for (const player of list.value.data) {
                     const ttr = asNullableNumber(player.ttr);
@@ -311,7 +311,7 @@ export async function estimatePlayerTtr(params: {
         clubName: params.clubName
     });
 
-    const publicRating = hit ? toPublicRating(hit.player, hit.fetchedAt) : null;
+    const publicRating = hit ? toPublicRating(hit.player, String(hit.meta.fetchedAt)) : null;
 
     if (!hit || !publicRating) {
         return empty(null);
@@ -322,7 +322,7 @@ export async function estimatePlayerTtr(params: {
     const season = getCurrentSeasonSegment(new Date(now));
     const { dateStart, dateEnd } = getDefaultSeasonDates(season);
 
-    const schedule = await readClubSchedule({
+    const schedule = await getClubScheduleData({
         organization: club.organization,
         clubNumber: club.clubNumber,
         season,
@@ -342,7 +342,7 @@ export async function estimatePlayerTtr(params: {
 
     const storedReports = await mapWithConcurrency(stored, TTR_ESTIMATE.CONCURRENCY, async (meeting) => {
         try {
-            const report = await readMeeting(meeting.id);
+            const report = await getMeeting(meeting.id);
             const data = report.value.data;
 
             if (!data) return [];
@@ -368,7 +368,7 @@ export async function estimatePlayerTtr(params: {
     const loadedReports = await mapWithConcurrency(plan.toLoad, TTR_ESTIMATE.CONCURRENCY, (meeting) =>
         runInBackground(async () => {
             try {
-                const report = await readMeeting(meeting.id);
+                const report = await getMeeting(meeting.id);
 
                 // Nicht abgelegt heißt nicht abgeschlossen: nicht bei jeder Anfrage erneut versuchen.
                 if (!hasStoredMeeting(meeting.id)) {

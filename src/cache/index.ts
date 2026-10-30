@@ -29,6 +29,16 @@ export function readThrough<T>(params: {
     return cache.readThrough(params);
 }
 
+/** Frischer Wert oder undefined, ohne zu laden. */
+export function peekCached<T>(key: string): T | undefined {
+    return cache.peek<T>(key);
+}
+
+/** Legt einen Wert direkt ab (Merkzettel, die als Nebenprodukt eines Loads entstehen). */
+export function putCached(key: string, value: unknown, ttlMs: number) {
+    cache.set(key, value, ttlMs);
+}
+
 export function getCachedValues(): unknown[] {
     return cache.usableValues();
 }

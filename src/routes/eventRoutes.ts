@@ -1,9 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
-import { fetchEventsList, fetchEventDetail } from "../dancingParkClient.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+import { getEventDetail, getEventList } from "../services/events.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 
 // Event ids are GUIDs. Validate before it ever reaches the upstream URL so a
 // client can never inject an arbitrary path (SSRF guard).
@@ -13,16 +10,9 @@ const GUID_REGEX =
 export async function eventRoutes(app: FastifyInstance) {
     app.get("/api/events", async (request, reply) => {
         try {
-            const result = await readThrough({
-                key: "events:list",
-                ttlMs: CACHE_TTL.EVENTS_LIST,
-                load: () => fetchEventsList()
-            });
+            const { value, meta } = await getEventList();
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -33,25 +23,13 @@ export async function eventRoutes(app: FastifyInstance) {
         const { id } = request.params as { id: string };
 
         if (!GUID_REGEX.test(id)) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "Ungültige Event-ID."
-                }
-            });
+            return sendInvalidInput(reply, "Ungültige Event-ID.");
         }
 
         try {
-            const result = await readThrough({
-                key: `events:detail:${id.toLowerCase()}`,
-                ttlMs: CACHE_TTL.EVENTS_DETAIL,
-                load: () => fetchEventDetail(id)
-            });
+            const { value, meta } = await getEventDetail(id);
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);

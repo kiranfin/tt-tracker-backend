@@ -1,774 +1,76 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { getRequiredAppUserId } from "../appUser.js";
-import { readThrough, type ReadThroughResult } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
 import { config } from "../config.js";
+import { getPlayerTtrEstimate } from "../services/estimate.js";
 import {
-    getPlayerHeadToHead,
-    getPlayerTtr,
-    getPlayerTtrHistory,
-    lookupPublicPlayer,
-    toPublicRating
-} from "../mytt/index.js";
-import { estimatePlayerTtr } from "../rating/playerEstimate.js";
-import { resolveMyttSessionForRequest, type MyttScope } from "../myttSessionStore.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+    comparePlayers,
+    getHeadToHead,
+    getPersonalTtr,
+    getPersonalTtrHistory
+} from "../services/personalTtr.js";
+import { getPublicPlayerRating } from "../services/rating.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
+import { normalizeNuid, toHeadToHeadOtherUser } from "../utils/nuid.js";
 
-function normalizeNuid(nuid: string) {
-    return nuid.trim().toUpperCase();
+function isValidNuid(nuid: string) {
+    return nuid.length >= 3;
 }
 
-/** Antwort mit `error` Feld: wird nicht gecacht, ein älterer guter Cache Eintrag hat Vorrang. */
-class ErrorPayload<T> extends Error {
-    constructor(readonly value: T) {
-        super("myTischtennis returned an error payload");
-        this.name = "ErrorPayload";
-    }
-}
-
-/**
- * TTR Daten über den Cache, damit bei einer Störung von myTischtennis der letzte Stand kommt.
- * Der Zugriff (eigene oder freigegebene myTT Session) wird vor dem Cache geprüft, damit ein
- * Treffer nichts an User ohne Berechtigung ausliefert.
- */
-async function readTtrData<T extends { error?: unknown }>(params: {
-    requestingUserId: string;
-    scope: MyttScope;
-    key: string;
-    ttlMs: number;
-    load: () => Promise<T>;
-}): Promise<ReadThroughResult<T>> {
-    await resolveMyttSessionForRequest({
-        requesterUserId: params.requestingUserId,
-        requiredScope: params.scope
-    });
-
-    try {
-        return await readThrough({
-            key: params.key,
-            ttlMs: params.ttlMs,
-            load: async () => {
-                const value = await params.load();
-
-                if (value.error !== null && value.error !== undefined) {
-                    throw new ErrorPayload(value);
-                }
-
-                return value;
-            }
-        });
-    } catch (error) {
-        if (error instanceof ErrorPayload) {
-            return {
-                value: error.value as T,
-                source: "upstream",
-                origin: "upstream",
-                fetchedAt: new Date().toISOString()
-            };
-        }
-
-        throw error;
-    }
-}
-
-function readPlayerTtr(requestingUserId: string, nuid: string) {
-    return readTtrData({
-        requestingUserId,
-        scope: "ttr:read",
-        key: `player-ttr:${nuid}`,
-        ttlMs: CACHE_TTL.PLAYER_TTR,
-        load: () => getPlayerTtr({ requestingUserId, nuid })
-    });
-}
-
-function readPlayerTtrHistory(requestingUserId: string, nuid: string) {
-    return readTtrData({
-        requestingUserId,
-        scope: "ttr_history:read",
-        key: `player-ttr-history:${nuid}`,
-        ttlMs: CACHE_TTL.PLAYER_TTR_HISTORY,
-        load: () => getPlayerTtrHistory({ requestingUserId, nuid })
-    });
-}
-
-function toHeadToHeadOtherUser(nuid: string) {
-    const normalized = normalizeNuid(nuid);
-
-    if (normalized.startsWith("NU")) {
-        return normalized.slice(2);
-    }
-
-    return normalized;
-}
-
-function hasAuthError(response: { error?: unknown | null }) {
-    return response.error !== null && response.error !== undefined;
-}
-
-type CompareSide = "left" | "right";
-type CompareLeader = CompareSide | "tie" | "unknown";
-
-function asRecord(value: unknown): Record<string, unknown> {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return {};
-    }
-
-    return value as Record<string, unknown>;
-}
-
-function asNullableNumber(value: unknown): number | null {
-    if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
-    }
-
-    if (typeof value === "string" && value.trim().length > 0) {
-        const parsed = Number(value.replace(",", "."));
-
-        if (Number.isFinite(parsed)) {
-            return parsed;
-        }
-    }
-
-    return null;
-}
-
-function asNullableString(value: unknown): string | null {
-    if (typeof value === "string" && value.trim().length > 0) {
-        return value;
-    }
-
-    if (typeof value === "number" && Number.isFinite(value)) {
-        return String(value);
-    }
-
-    return null;
-}
-
-function roundNumber(value: number | null, digits = 1) {
-    if (value === null || !Number.isFinite(value)) {
-        return null;
-    }
-
-    const factor = 10 ** digits;
-    return Math.round(value * factor) / factor;
-}
-
-function firstNumber(
-    record: Record<string, unknown>,
-    keys: string[]
-): number | null {
-    for (const key of keys) {
-        const value = asNullableNumber(record[key]);
-
-        if (value !== null) {
-            return value;
-        }
-    }
-
-    return null;
-}
-
-function firstString(
-    record: Record<string, unknown>,
-    keys: string[]
-): string | null {
-    for (const key of keys) {
-        const value = asNullableString(record[key]);
-
-        if (value !== null) {
-            return value;
-        }
-    }
-
-    return null;
-}
-
-function parseTimestamp(value: string | null) {
-    if (!value) return null;
-
-    const timestamp = Date.parse(value);
-
-    return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function sortEventsOldestFirst(events: unknown[]) {
-    return events
-        .map((event, index) => ({
-            event,
-            index,
-            timestamp: parseTimestamp(firstString(asRecord(event), ["event_date_time"]))
-        }))
-        .sort((left, right) => {
-            if (left.timestamp === null || right.timestamp === null) {
-                return left.index - right.index;
-            }
-
-            return left.timestamp - right.timestamp;
-        })
-        .map((item) => item.event);
-}
-
-function getNumberDifference(left: number | null, right: number | null) {
-    if (left === null || right === null) {
-        return null;
-    }
-
-    return left - right;
-}
-
-function getLeader(
-    left: number | null,
-    right: number | null,
-    higherIsBetter = true
-): CompareLeader {
-    if (left === null || right === null) {
-        return "unknown";
-    }
-
-    if (left === right) {
-        return "tie";
-    }
-
-    if (higherIsBetter) {
-        return left > right ? "left" : "right";
-    }
-
-    return left < right ? "left" : "right";
-}
-
-function buildNumberComparison(params: {
-    left: number | null;
-    right: number | null;
-    higherIsBetter?: boolean;
-}) {
-    const difference = getNumberDifference(params.left, params.right);
-
-    return {
-        left: params.left,
-        right: params.right,
-        difference,
-        absoluteDifference:
-            difference === null ? null : Math.abs(difference),
-        leader: getLeader(
-            params.left,
-            params.right,
-            params.higherIsBetter ?? true
-        )
-    };
-}
-
-function buildRatingOdds(leftTtr: number | null, rightTtr: number | null) {
-    const difference = getNumberDifference(leftTtr, rightTtr);
-
-    if (difference === null) {
-        return {
-            available: false,
-            favorite: "unknown" as CompareLeader,
-            ttrDifference: null,
-            leftWinProbability: null,
-            rightWinProbability: null
-        };
-    }
-
-    const leftProbability = 1 / (1 + 10 ** (-difference / 400));
-    const rightProbability = 1 - leftProbability;
-
-    return {
-        available: true,
-        favorite: getLeader(leftTtr, rightTtr),
-        ttrDifference: difference,
-        leftWinProbability: roundNumber(leftProbability, 3),
-        rightWinProbability: roundNumber(rightProbability, 3)
-    };
-}
-
-type HistoryPoint = {
-    index: number;
-    date: string | null;
-    timestamp: number | null;
-    ttr: number;
-    label: string | null;
+type PublicPlayerQuery = {
+    organization?: string;
+    clubNumber?: string;
+    clubName?: string;
+    name?: string;
 };
 
-function normalizeHistoryPoints(events: unknown[]): HistoryPoint[] {
-    const points = events
-        .map((event, index): HistoryPoint | null => {
-            const record = asRecord(event);
-
-            // myTischtennis liefert pro Event ttr_after und event_date_time
-            const ttr = firstNumber(record, [
-                "ttr_after",
-                "ttr",
-                "qttr",
-                "value",
-                "rating",
-                "new_ttr",
-                "ttr_new",
-                "player_ttr",
-                "fedRank"
-            ]);
-
-            if (ttr === null) {
-                return null;
-            }
-
-            const date = firstString(record, [
-                "event_date_time",
-                "date",
-                "datum",
-                "event_date",
-                "ttr_date",
-                "created_at",
-                "createdAt"
-            ]);
-
-            return {
-                index,
-                date,
-                timestamp: parseTimestamp(date),
-                ttr,
-                label: firstString(record, [
-                    "event",
-                    "event_name",
-                    "name",
-                    "description",
-                    "type"
-                ])
-            };
-        })
-        .filter((point): point is HistoryPoint => point !== null);
-
-    const hasUsableDates = points.some((point) => point.timestamp !== null);
-
-    if (!hasUsableDates) {
-        return points;
-    }
-
-    return [...points].sort((left, right) => {
-        if (left.timestamp === null && right.timestamp === null) {
-            return left.index - right.index;
-        }
-
-        if (left.timestamp === null) return 1;
-        if (right.timestamp === null) return -1;
-
-        return left.timestamp - right.timestamp;
-    });
-}
-
-function buildHistoryStats(points: HistoryPoint[]) {
-    if (points.length === 0) {
-        return {
-            eventCount: 0,
-            firstTtr: null,
-            latestTtr: null,
-            minTtr: null,
-            maxTtr: null,
-            averageTtr: null,
-            totalChange: null,
-            lastChange: null,
-            recentChange5: null,
-            recentChange10: null,
-            averageChangePerEvent: null,
-            volatility: null,
-            trend: "unknown" as const
-        };
-    }
-
-    const values = points.map((point) => point.ttr);
-    const firstTtr = values[0] ?? null;
-    const latestTtr = values.at(-1) ?? null;
-
-    const changes = values
-        .slice(1)
-        .map((value, index) => value - values[index]);
-
-    const totalChange =
-        firstTtr === null || latestTtr === null ? null : latestTtr - firstTtr;
-
-    const averageChange =
-        changes.length === 0
-            ? null
-            : changes.reduce((sum, value) => sum + value, 0) / changes.length;
-
-    const volatility =
-        changes.length === 0
-            ? null
-            : changes.reduce((sum, value) => sum + Math.abs(value), 0) /
-            changes.length;
-
-    const recentChange = (count: number) => {
-        if (values.length < 2) return null;
-
-        const recentValues = values.slice(-count);
-        const first = recentValues[0];
-        const latest = recentValues.at(-1);
-
-        if (first === undefined || latest === undefined) {
-            return null;
-        }
-
-        return latest - first;
-    };
-
-    let trend: "rising" | "falling" | "stable" | "unknown" = "unknown";
-
-    if (totalChange !== null) {
-        if (totalChange > 0) trend = "rising";
-        else if (totalChange < 0) trend = "falling";
-        else trend = "stable";
-    }
-
-    return {
-        eventCount: points.length,
-        firstTtr,
-        latestTtr,
-        minTtr: Math.min(...values),
-        maxTtr: Math.max(...values),
-        averageTtr: roundNumber(
-            values.reduce((sum, value) => sum + value, 0) / values.length,
-            1
-        ),
-        totalChange,
-        lastChange: changes.at(-1) ?? null,
-        recentChange5: recentChange(5),
-        recentChange10: recentChange(10),
-        averageChangePerEvent: roundNumber(averageChange, 2),
-        volatility: roundNumber(volatility, 2),
-        trend
-    };
-}
-
-function buildPlayerSnapshot(params: {
-    nuid: string;
-    ttrResult: Awaited<ReturnType<typeof getPlayerTtr>>;
-    historyResult: Awaited<ReturnType<typeof getPlayerTtrHistory>>;
-}) {
-    const events = Array.isArray(params.historyResult.event)
-        ? params.historyResult.event
-        : [];
-
-    const historyPoints = normalizeHistoryPoints(events);
-    const historyStats = buildHistoryStats(historyPoints);
-
-    const currentTtr =
-        asNullableNumber(params.ttrResult.ttr) ??
-        asNullableNumber(params.historyResult.ttr) ??
-        historyStats.latestTtr;
-
-    const qttr =
-        asNullableNumber(params.historyResult.vq_ttr) ??
-        asNullableNumber(params.historyResult.ttr_last_fixed);
-
-    const maxTtr =
-        asNullableNumber(params.historyResult.max_ttr) ??
-        historyStats.maxTtr;
-
-    return {
-        nuid: params.nuid,
-        available: {
-            ttr: !hasAuthError(params.ttrResult) && currentTtr !== null,
-            history: !hasAuthError(params.historyResult),
-            any:
-                (!hasAuthError(params.ttrResult) && currentTtr !== null) ||
-                !hasAuthError(params.historyResult)
-        },
-        identity: {
-            personName: params.historyResult.person_name ?? null,
-            clubName: params.historyResult.club_name ?? null
-        },
-        ratings: {
-            currentTtr,
-            qttr,
-            qttrDate: params.historyResult.ttr_last_fixed_date ?? null,
-            maxTtr,
-            maxTtrDate: params.historyResult.max_ttr_date ?? null,
-            ttrDate: params.historyResult.ttr_date ?? null
-        },
-        history: {
-            stats: historyStats,
-            points: historyPoints.map((point) => ({
-                date: point.date,
-                ttr: point.ttr,
-                label: point.label
-            })),
-            // Reihenfolge von myTischtennis nicht voraussetzen, sonst landen evtl. die ältesten Events hier
-            recentEvents: sortEventsOldestFirst(events).slice(-10)
-        },
-        error: {
-            ttr: params.ttrResult.error ?? null,
-            history: params.historyResult.error ?? null
-        }
-    };
-}
-
-function buildComparison(
-    left: ReturnType<typeof buildPlayerSnapshot>,
-    right: ReturnType<typeof buildPlayerSnapshot>
+/**
+ * Eingaben der öffentlichen Spieler Routen (rating, ttr-estimate): Verein per organization und
+ * clubNumber oder, wenn er fehlt, über den Namen des Spielers. Antwortet bei Fehlern selbst.
+ */
+function parsePublicPlayerRequest(
+    rawNuid: string,
+    query: PublicPlayerQuery,
+    reply: FastifyReply
 ) {
-    return {
-        ratings: {
-            currentTtr: buildNumberComparison({
-                left: left.ratings.currentTtr,
-                right: right.ratings.currentTtr
-            }),
-            qttr: buildNumberComparison({
-                left: left.ratings.qttr,
-                right: right.ratings.qttr
-            }),
-            maxTtr: buildNumberComparison({
-                left: left.ratings.maxTtr,
-                right: right.ratings.maxTtr
-            })
-        },
-        history: {
-            eventCount: buildNumberComparison({
-                left: left.history.stats.eventCount,
-                right: right.history.stats.eventCount
-            }),
-            totalChange: buildNumberComparison({
-                left: left.history.stats.totalChange,
-                right: right.history.stats.totalChange
-            }),
-            lastChange: buildNumberComparison({
-                left: left.history.stats.lastChange,
-                right: right.history.stats.lastChange
-            }),
-            recentChange5: buildNumberComparison({
-                left: left.history.stats.recentChange5,
-                right: right.history.stats.recentChange5
-            }),
-            recentChange10: buildNumberComparison({
-                left: left.history.stats.recentChange10,
-                right: right.history.stats.recentChange10
-            }),
-            volatility: buildNumberComparison({
-                left: left.history.stats.volatility,
-                right: right.history.stats.volatility,
-                higherIsBetter: false
-            })
-        },
-        odds: {
-            byCurrentTtr: buildRatingOdds(
-                left.ratings.currentTtr,
-                right.ratings.currentTtr
-            ),
-            byQttr: buildRatingOdds(left.ratings.qttr, right.ratings.qttr),
-            byMaxTtr: buildRatingOdds(
-                left.ratings.maxTtr,
-                right.ratings.maxTtr
-            )
-        },
-        sameClub:
-            left.identity.clubName !== null &&
-            right.identity.clubName !== null &&
-            left.identity.clubName === right.identity.clubName
-    };
-}
+    const nuid = normalizeNuid(rawNuid);
+    const organization = query.organization?.trim().toUpperCase() ?? "";
+    const clubNumber = query.clubNumber?.trim() ?? "";
+    const clubName = query.clubName?.trim() || undefined;
+    const name = query.name?.trim() || undefined;
 
-function buildSummary(
-    left: ReturnType<typeof buildPlayerSnapshot>,
-    right: ReturnType<typeof buildPlayerSnapshot>,
-    comparison: ReturnType<typeof buildComparison>
-) {
-    return {
-        strongerCurrent:
-            comparison.ratings.currentTtr.leader === "left"
-                ? left.nuid
-                : comparison.ratings.currentTtr.leader === "right"
-                    ? right.nuid
-                    : comparison.ratings.currentTtr.leader,
-        strongerQttr:
-            comparison.ratings.qttr.leader === "left"
-                ? left.nuid
-                : comparison.ratings.qttr.leader === "right"
-                    ? right.nuid
-                    : comparison.ratings.qttr.leader,
-        betterRecentForm:
-            comparison.history.recentChange5.leader === "left"
-                ? left.nuid
-                : comparison.history.recentChange5.leader === "right"
-                    ? right.nuid
-                    : comparison.history.recentChange5.leader,
-        moreStable:
-            comparison.history.volatility.leader === "left"
-                ? left.nuid
-                : comparison.history.volatility.leader === "right"
-                    ? right.nuid
-                    : comparison.history.volatility.leader,
-        currentTtrDifference: comparison.ratings.currentTtr.difference,
-        qttrDifference: comparison.ratings.qttr.difference,
-        favoriteByCurrentTtr:
-            comparison.odds.byCurrentTtr.favorite === "left"
-                ? left.nuid
-                : comparison.odds.byCurrentTtr.favorite === "right"
-                    ? right.nuid
-                    : comparison.odds.byCurrentTtr.favorite
-    };
-}
-
-function parseScoreLikeResult(value: string | null) {
-    if (!value) return null;
-
-    const match = value.match(/(\d+)\s*[:.-]\s*(\d+)/);
-
-    if (!match) return null;
-
-    const left = Number(match[1]);
-    const right = Number(match[2]);
-
-    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    if (!isValidNuid(nuid)) {
+        sendInvalidInput(reply, "Ungültige Spieler-ID.");
         return null;
     }
 
-    return { left, right };
-}
-
-function getOwnOtherScoreFromHeadToHeadItem(item: unknown) {
-    const record = asRecord(item);
-
-    const setPoints = asRecord(record.set_points);
-    const ownSetPoints = asNullableNumber(setPoints.own);
-    const otherSetPoints = asNullableNumber(setPoints.other);
-
-    if (ownSetPoints !== null && otherSetPoints !== null) {
-        return {
-            left: ownSetPoints,
-            right: otherSetPoints
-        };
+    if ((!organization || !clubNumber) && !name) {
+        sendInvalidInput(reply, "organization und clubNumber oder name sind erforderlich.");
+        return null;
     }
 
-    const points = asRecord(record.points);
-    const ownPoints = asNullableNumber(points.own);
-    const otherPoints = asNullableNumber(points.other);
-
-    if (ownPoints !== null && otherPoints !== null) {
-        return {
-            left: ownPoints,
-            right: otherPoints
-        };
-    }
-
-    const resultText = firstString(record, [
-        "result",
-        "ergebnis",
-        "score",
-        "match_result"
-    ]);
-
-    return parseScoreLikeResult(resultText);
-}
-
-function buildHeadToHeadStats(items: unknown[]) {
-    let parsed = 0;
-    let leftWins = 0;
-    let rightWins = 0;
-    let draws = 0;
-
-    for (const item of items) {
-        const score = getOwnOtherScoreFromHeadToHeadItem(item);
-
-        if (!score) {
-            continue;
-        }
-
-        parsed += 1;
-
-        if (score.left > score.right) {
-            leftWins += 1;
-        } else if (score.right > score.left) {
-            rightWins += 1;
-        } else {
-            draws += 1;
-        }
-    }
-
-    return {
-        itemCount: items.length,
-        parsedItemCount: parsed,
-        leftWins,
-        rightWins,
-        draws,
-        leftWinRate:
-            parsed === 0 ? null : roundNumber(leftWins / parsed, 3),
-        rightWinRate:
-            parsed === 0 ? null : roundNumber(rightWins / parsed, 3)
-    };
-}
-
-function errorToResponse(error: unknown) {
-    if (!error) return null;
-
-    if (error instanceof Error) {
-        return {
-            name: error.name,
-            message: error.message
-        };
-    }
-
-    return {
-        name: "UnknownError",
-        message: "Unbekannter Fehler"
-    };
+    return { nuid, organization, clubNumber, clubName, name };
 }
 
 export async function playerRoutes(app: FastifyInstance) {
     // Öffentlicher TTR aus der Andro Rangliste des Vereins, ohne myTischtennis Login.
-    // Verein per organization und clubNumber oder, wenn er fehlt, über den Namen des Spielers.
     app.get("/api/players/:nuid/rating", async (request, reply) => {
         try {
-            const { nuid: rawNuid } = request.params as { nuid: string };
-            const nuid = normalizeNuid(rawNuid);
+            const { nuid } = request.params as { nuid: string };
+            const input = parsePublicPlayerRequest(nuid, request.query as PublicPlayerQuery, reply);
 
-            const query = request.query as {
-                organization?: string;
-                clubNumber?: string;
-                clubName?: string;
-                name?: string;
-            };
-
-            const organization = query.organization?.trim().toUpperCase() ?? "";
-            const clubNumber = query.clubNumber?.trim() ?? "";
-            const name = query.name?.trim() ?? "";
-
-            if (!nuid || nuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige Spieler-ID."
-                    }
-                });
+            if (!input) {
+                return reply;
             }
 
-            if ((!organization || !clubNumber) && !name) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "organization und clubNumber oder name sind erforderlich."
-                    }
-                });
-            }
-
-            const hit = await lookupPublicPlayer({
-                nuid,
-                name,
-                organization,
-                clubNumber,
-                clubName: query.clubName?.trim() || undefined
+            const { value, meta } = await getPublicPlayerRating({
+                nuid: input.nuid,
+                name: input.name ?? "",
+                organization: input.organization,
+                clubNumber: input.clubNumber,
+                clubName: input.clubName
             });
 
-            const rating = hit ? toPublicRating(hit.player, hit.fetchedAt) : null;
-
-            return {
-                data: {
-                    nuid,
-                    available: rating !== null,
-                    rating,
-                    club: hit?.club ?? null
-                },
-                meta: hit ? buildMeta(hit) : { source: "upstream" }
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -782,27 +84,13 @@ export async function playerRoutes(app: FastifyInstance) {
             const { nuid: rawNuid } = request.params as { nuid: string };
             const nuid = normalizeNuid(rawNuid);
 
-            if (!nuid || nuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige Spieler-ID."
-                    }
-                });
+            if (!isValidNuid(nuid)) {
+                return sendInvalidInput(reply, "Ungültige Spieler-ID.");
             }
 
-            const cached = await readPlayerTtr(requestingUserId, nuid);
-            const result = cached.value;
+            const { value, meta } = await getPersonalTtr(requestingUserId, nuid);
 
-            return {
-                data: {
-                    nuid,
-                    available: !hasAuthError(result) && result.ttr != null,
-                    ttr: result.ttr ?? null,
-                    error: result.error ?? null
-                },
-                meta: buildMeta(cached)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -822,54 +110,16 @@ export async function playerRoutes(app: FastifyInstance) {
         }
 
         try {
-            const { nuid: rawNuid } = request.params as { nuid: string };
-            const nuid = normalizeNuid(rawNuid);
+            const { nuid } = request.params as { nuid: string };
+            const input = parsePublicPlayerRequest(nuid, request.query as PublicPlayerQuery, reply);
 
-            const query = request.query as {
-                organization?: string;
-                clubNumber?: string;
-                clubName?: string;
-                name?: string;
-            };
-
-            const organization = query.organization?.trim().toUpperCase() ?? "";
-            const clubNumber = query.clubNumber?.trim() ?? "";
-            const clubName = query.clubName?.trim() || undefined;
-            const name = query.name?.trim() || undefined;
-
-            if (!nuid || nuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige Spieler-ID."
-                    }
-                });
+            if (!input) {
+                return reply;
             }
 
-            if ((!organization || !clubNumber) && !name) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "organization und clubNumber oder name sind erforderlich."
-                    }
-                });
-            }
+            const { value, meta } = await getPlayerTtrEstimate(input);
 
-            const cached = await readThrough({
-                key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}:${name ?? ""}`,
-                // Unvollständig (pending): nur kurz cachen, der nächste Aufruf lädt die nächste Etappe.
-                ttlMs: (estimate) =>
-                    estimate.coverage.pending > 0
-                        ? CACHE_TTL.EMPTY_RESULT
-                        : CACHE_TTL.PLAYER_TTR_ESTIMATE,
-                load: () =>
-                    estimatePlayerTtr({ nuid, organization, clubNumber, clubName, name })
-            });
-
-            return {
-                data: cached.value,
-                meta: buildMeta(cached)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -883,35 +133,13 @@ export async function playerRoutes(app: FastifyInstance) {
             const { nuid: rawNuid } = request.params as { nuid: string };
             const nuid = normalizeNuid(rawNuid);
 
-            if (!nuid || nuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige Spieler-ID."
-                    }
-                });
+            if (!isValidNuid(nuid)) {
+                return sendInvalidInput(reply, "Ungültige Spieler-ID.");
             }
 
-            const cached = await readPlayerTtrHistory(requestingUserId, nuid);
-            const result = cached.value;
+            const { value, meta } = await getPersonalTtrHistory(requestingUserId, nuid);
 
-            return {
-                data: {
-                    nuid,
-                    available: !hasAuthError(result),
-                    ttr: result.ttr ?? null,
-                    qttr: result.vq_ttr ?? Number(result.ttr_last_fixed) ?? null,
-                    qttrDate: result.ttr_last_fixed_date ?? null,
-                    maxTtr: result.max_ttr ?? null,
-                    ttrDate: result.ttr_date ?? null,
-                    maxTtrDate: result.max_ttr_date ?? null,
-                    clubName: result.club_name ?? null,
-                    personName: result.person_name ?? null,
-                    events: result.event ?? [],
-                    error: result.error ?? null
-                },
-                meta: buildMeta(cached)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -926,32 +154,13 @@ export async function playerRoutes(app: FastifyInstance) {
             const nuid = normalizeNuid(rawNuid);
             const otherUser = toHeadToHeadOtherUser(nuid);
 
-            if (!otherUser || otherUser.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige Gegner-ID."
-                    }
-                });
+            if (!isValidNuid(otherUser)) {
+                return sendInvalidInput(reply, "Ungültige Gegner-ID.");
             }
 
-            const result = await getPlayerHeadToHead({
-                requestingUserId,
-                otherUser
-            });
+            const { value, meta } = await getHeadToHead(requestingUserId, nuid, otherUser);
 
-            return {
-                data: {
-                    nuid,
-                    otherUser,
-                    available: !hasAuthError(result),
-                    items: Array.isArray(result.data) ? result.data : [],
-                    error: result.error ?? null
-                },
-                meta: {
-                    source: "upstream"
-                }
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -962,10 +171,7 @@ export async function playerRoutes(app: FastifyInstance) {
         try {
             const requestingUserId = getRequiredAppUserId(request);
 
-            const {
-                leftNuid: rawLeftNuid,
-                rightNuid: rawRightNuid
-            } = request.params as {
+            const { leftNuid: rawLeftNuid, rightNuid: rawRightNuid } = request.params as {
                 leftNuid: string;
                 rightNuid: string;
             };
@@ -973,137 +179,26 @@ export async function playerRoutes(app: FastifyInstance) {
             const leftNuid = normalizeNuid(rawLeftNuid);
             const rightNuid = normalizeNuid(rawRightNuid);
 
-            if (!leftNuid || leftNuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige erste Spieler-ID."
-                    }
-                });
+            if (!isValidNuid(leftNuid)) {
+                return sendInvalidInput(reply, "Ungültige erste Spieler-ID.");
             }
 
-            if (!rightNuid || rightNuid.length < 3) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Ungültige zweite Spieler-ID."
-                    }
-                });
+            if (!isValidNuid(rightNuid)) {
+                return sendInvalidInput(reply, "Ungültige zweite Spieler-ID.");
             }
 
             if (leftNuid === rightNuid) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "Bitte zwei unterschiedliche Spieler auswählen."
-                    }
-                });
+                return sendInvalidInput(reply, "Bitte zwei unterschiedliche Spieler auswählen.");
             }
 
-            const [leftTtr, rightTtr, leftHistory, rightHistory] = await Promise.all([
-                readPlayerTtr(requestingUserId, leftNuid),
-                readPlayerTtr(requestingUserId, rightNuid),
-                readPlayerTtrHistory(requestingUserId, leftNuid),
-                readPlayerTtrHistory(requestingUserId, rightNuid)
-            ]);
+            const { value, meta } = await comparePlayers(
+                requestingUserId,
+                leftNuid,
+                rightNuid,
+                (info, message) => request.log.warn(info, message)
+            );
 
-            const leftTtrResult = leftTtr.value;
-            const rightTtrResult = rightTtr.value;
-            const leftHistoryResult = leftHistory.value;
-            const rightHistoryResult = rightHistory.value;
-
-            const left = buildPlayerSnapshot({
-                nuid: leftNuid,
-                ttrResult: leftTtrResult,
-                historyResult: leftHistoryResult
-            });
-
-            const right = buildPlayerSnapshot({
-                nuid: rightNuid,
-                ttrResult: rightTtrResult,
-                historyResult: rightHistoryResult
-            });
-
-            const comparison = buildComparison(left, right);
-
-            let headToHead:
-                | {
-                available: boolean;
-                perspective: {
-                    requestedLeftNuid: string;
-                    requestedRightNuid: string;
-                    upstreamOtherUser: string;
-                    note: string;
-                };
-                stats: ReturnType<typeof buildHeadToHeadStats>;
-                items: unknown[];
-                error: unknown | null;
-            }
-                | null = null;
-
-            const otherUser = toHeadToHeadOtherUser(rightNuid);
-
-            try {
-                const headToHeadResult = await getPlayerHeadToHead({
-                    requestingUserId,
-                    otherUser
-                });
-
-                const items = Array.isArray(headToHeadResult.data)
-                    ? headToHeadResult.data
-                    : [];
-
-                headToHead = {
-                    available: !hasAuthError(headToHeadResult),
-                    perspective: {
-                        requestedLeftNuid: leftNuid,
-                        requestedRightNuid: rightNuid,
-                        upstreamOtherUser: otherUser,
-                        note:
-                            "myTischtennis liefert Head-to-Head nur aus Sicht des eingeloggten myTischtennis-Users gegen other_user. Dieser Block passt also nur exakt zum Paar, wenn die erste NUID dem eingeloggten myTischtennis-User entspricht."
-                    },
-                    stats: buildHeadToHeadStats(items),
-                    items,
-                    error: headToHeadResult.error ?? null
-                };
-            } catch (error) {
-                request.log.warn(
-                    {
-                        error: errorToResponse(error),
-                        leftNuid,
-                        rightNuid
-                    },
-                    "Player compare head-to-head unavailable"
-                );
-
-                headToHead = {
-                    available: false,
-                    perspective: {
-                        requestedLeftNuid: leftNuid,
-                        requestedRightNuid: rightNuid,
-                        upstreamOtherUser: otherUser,
-                        note:
-                            "Head-to-Head konnte nicht geladen werden. TTR- und History-Vergleich bleiben trotzdem verfügbar."
-                    },
-                    stats: buildHeadToHeadStats([]),
-                    items: [],
-                    error: errorToResponse(error)
-                };
-            }
-
-            return {
-                data: {
-                    left,
-                    right,
-                    comparison,
-                    summary: buildSummary(left, right, comparison),
-                    headToHead
-                },
-                meta: {
-                    source: "upstream",
-                    generatedAt: new Date().toISOString()
-                }
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);

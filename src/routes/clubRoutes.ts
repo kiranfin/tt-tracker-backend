@@ -1,28 +1,21 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
 import {
-    getClubHead,
-    getClubInfo,
-    getClubTeams
-} from "../mytt/index.js";
-import { readClubPlayers } from "../mytt/clubPlayersCache.js";
-import { readClubSchedule } from "../mytt/cachedReads.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+    getClubInfoData,
+    getClubLogos,
+    getClubPlayerList,
+    getClubScheduleData,
+    getClubTeamList
+} from "../services/club.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 
 const MAX_LOGO_BATCH = 30;
 const CLUB_REF_PATTERN = /^[A-Za-z0-9-]{2,12}:\d{3,10}$/;
 
-// Kopf (Logo) pro Verein, saisonunabhängig gecacht. Info Seite und Logo Endpoint teilen sich den Eintrag.
-function readClubHead(organization: string, clubNumber: string, season = getCurrentSeasonSegment()) {
-    return readThrough({
-        key: `club-head:${organization}:${clubNumber}`,
-        ttlMs: CACHE_TTL.CLUB_HEAD,
-        load: () => getClubHead({ organization, clubNumber, season })
-    });
-}
+type ClubParams = {
+    organization?: string;
+    clubNumber?: string;
+};
 
 export async function clubRoutes(app: FastifyInstance) {
     // Logos für mehrere Vereine auf einmal (Suche, Favoriten, Tabellen): ?clubs=TTBW:2055064,WTTV:12201
@@ -45,38 +38,21 @@ export async function clubRoutes(app: FastifyInstance) {
         ];
 
         if (refs.length === 0 || refs.length > MAX_LOGO_BATCH) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: `clubs braucht 1 bis ${MAX_LOGO_BATCH} Einträge im Format VERBAND:VEREINSNUMMER.`
-                }
-            });
+            return sendInvalidInput(
+                reply,
+                `clubs braucht 1 bis ${MAX_LOGO_BATCH} Einträge im Format VERBAND:VEREINSNUMMER.`
+            );
         }
 
-        const results = await Promise.all(
-            refs.map(async (ref) => {
-                const [organization, clubNumber] = ref.split(":");
-
-                try {
-                    const result = await readClubHead(organization, clubNumber);
-                    return [ref, result.value.logoUrl] as const;
-                } catch (error) {
-                    request.log.warn({ err: error, ref }, "Vereinslogo nicht geladen");
-                    return null;
-                }
-            })
+        const logos = await getClubLogos(refs, (error, ref) =>
+            request.log.warn({ err: error, ref }, "Vereinslogo nicht geladen")
         );
 
-        return {
-            data: Object.fromEntries(results.filter((entry) => entry !== null))
-        };
+        return { data: logos };
     });
 
     app.get("/api/clubs/:organization/:clubNumber/info", async (request, reply) => {
-        const params = request.params as {
-            organization?: string;
-            clubNumber?: string;
-        };
+        const params = request.params as ClubParams;
 
         const query = request.query as {
             season?: string;
@@ -89,35 +65,21 @@ export async function clubRoutes(app: FastifyInstance) {
         const clubSlug = query.clubSlug?.trim() || "x";
 
         if (!organization || !clubNumber || !/^\d{2}--\d{2}$/.test(season)) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "organization, clubNumber und eine gültige season sind erforderlich."
-                }
-            });
+            return sendInvalidInput(
+                reply,
+                "organization, clubNumber und eine gültige season sind erforderlich."
+            );
         }
 
         try {
-            // Der Slug ändert die Daten nicht, deshalb nicht im Cache Key.
-            const result = await readThrough({
-                key: `club-info:${organization}:${clubNumber}:${season}`,
-                ttlMs: CACHE_TTL.CLUB_INFO,
-                load: () =>
-                    getClubInfo(
-                        {
-                            organization,
-                            clubNumber,
-                            season,
-                            clubSlug
-                        },
-                        async () => (await readClubHead(organization, clubNumber, season)).value
-                    )
+            const { value, meta } = await getClubInfoData({
+                organization,
+                clubNumber,
+                season,
+                clubSlug
             });
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -125,38 +87,19 @@ export async function clubRoutes(app: FastifyInstance) {
     });
 
     app.get("/api/clubs/:organization/:clubNumber/teams", async (request, reply) => {
-        const params = request.params as {
-            organization?: string;
-            clubNumber?: string;
-        };
+        const params = request.params as ClubParams;
 
         const organization = params.organization?.trim().toUpperCase() ?? "";
         const clubNumber = params.clubNumber?.trim() ?? "";
 
         if (!organization || !clubNumber) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "organization und clubNumber sind erforderlich."
-                }
-            });
+            return sendInvalidInput(reply, "organization und clubNumber sind erforderlich.");
         }
 
         try {
-            const result = await readThrough({
-                key: `club-teams:${organization}:${clubNumber}`,
-                ttlMs: CACHE_TTL.CLUB_TEAMS,
-                load: () =>
-                    getClubTeams({
-                        organization,
-                        clubNumber
-                    })
-            });
+            const { value, meta } = await getClubTeamList({ organization, clubNumber });
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -164,10 +107,7 @@ export async function clubRoutes(app: FastifyInstance) {
     });
 
     app.get("/api/clubs/:organization/:clubNumber/players", async (request, reply) => {
-        const params = request.params as {
-            organization?: string;
-            clubNumber?: string;
-        };
+        const params = request.params as ClubParams;
 
         const query = request.query as {
             androClubNr?: string;
@@ -186,26 +126,18 @@ export async function clubRoutes(app: FastifyInstance) {
             query.clubName?.trim() || query.club_name?.trim() || undefined;
 
         if (!organization || !clubNumber) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "organization und clubNumber sind erforderlich."
-                }
-            });
+            return sendInvalidInput(reply, "organization und clubNumber sind erforderlich.");
         }
 
         try {
-            const result = await readClubPlayers({
+            const { value, meta } = await getClubPlayerList({
                 organization,
                 clubNumber,
                 androClubNr,
                 clubName
             });
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -213,10 +145,7 @@ export async function clubRoutes(app: FastifyInstance) {
     });
 
     app.get("/api/clubs/:organization/:clubNumber/schedule", async (request, reply) => {
-        const params = request.params as {
-            organization?: string;
-            clubNumber?: string;
-        };
+        const params = request.params as ClubParams;
 
         const query = request.query as {
             season?: string;
@@ -233,12 +162,10 @@ export async function clubRoutes(app: FastifyInstance) {
         const clubSlug = query.clubSlug?.trim() || "x";
 
         if (!organization || !clubNumber || !season) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "organization, clubNumber und season sind erforderlich."
-                }
-            });
+            return sendInvalidInput(
+                reply,
+                "organization, clubNumber und season sind erforderlich."
+            );
         }
 
         const defaults = getDefaultSeasonDates(season);
@@ -254,7 +181,7 @@ export async function clubRoutes(app: FastifyInstance) {
             defaults.dateEnd;
 
         try {
-            const result = await readClubSchedule({
+            const { value, meta } = await getClubScheduleData({
                 organization,
                 clubNumber,
                 season,
@@ -263,10 +190,7 @@ export async function clubRoutes(app: FastifyInstance) {
                 dateEnd
             });
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);

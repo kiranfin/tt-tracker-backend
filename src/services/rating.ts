@@ -1,9 +1,9 @@
-import { readThrough } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
+import { cacheKeys } from "../cacheKeys.js";
+import { findPlayerInClubList, normalizePlayerId, toPublicRating } from "../mytt/rating.js";
+import { searchClubs, searchPlayers } from "../mytt/search.js";
 import type { ClubPlayer } from "../schemas.js";
-import { readClubPlayers } from "./clubPlayersCache.js";
-import { findPlayerInClubList, normalizePlayerId } from "./rating.js";
-import { searchClubs, searchPlayers } from "./search.js";
+import { getClubPlayerList } from "./club.js";
+import { readByPolicy, type ResponseMeta } from "./read.js";
 
 export type PlayerClub = {
     organization: string;
@@ -14,12 +14,9 @@ export type PlayerClub = {
 export type PublicPlayerHit = {
     club: PlayerClub;
     player: ClubPlayer;
-    fetchedAt: string;
-    source: Awaited<ReturnType<typeof readClubPlayers>>["source"];
-    origin: Awaited<ReturnType<typeof readClubPlayers>>["origin"];
+    // Herkunft und Alter der Vereinsliste, aus der der Spieler stammt.
+    meta: ResponseMeta;
 };
-
-const PLAYER_CLUB_TTL_MS = 12 * 60 * 60 * 1000;
 
 /** "TTV Erdmannhausen (2055015)" ergibt Name und Vereinsnummer. */
 function parseLicenceClub(value: string | null | undefined) {
@@ -68,10 +65,9 @@ async function loadPlayerClub(nuid: string, name: string): Promise<PlayerClub | 
 
 /** Verein eines Spielers über die öffentliche Spieler- und Vereinssuche, pro Spieler gecacht. */
 export async function resolvePlayerClub(params: { nuid: string; name: string }) {
-    const result = await readThrough({
-        key: `player-club:${normalizePlayerId(params.nuid)}`,
-        ttlMs: (club: PlayerClub | null) =>
-            club === null ? CACHE_TTL.EMPTY_RESULT : PLAYER_CLUB_TTL_MS,
+    const result = await readByPolicy<PlayerClub | null>({
+        kind: "PLAYER_CLUB",
+        key: cacheKeys.playerClub(normalizePlayerId(params.nuid)),
         load: () => loadPlayerClub(params.nuid, params.name)
     });
 
@@ -100,7 +96,7 @@ export async function lookupPublicPlayer(params: {
 
         tried.add(key);
 
-        const list = await readClubPlayers(club);
+        const list = await getClubPlayerList(club);
         const player = findPlayerInClubList(list.value.data, params.nuid);
 
         if (!player) {
@@ -114,9 +110,7 @@ export async function lookupPublicPlayer(params: {
                 clubName: club.clubName ?? player.club_name ?? ""
             },
             player,
-            fetchedAt: list.fetchedAt,
-            source: list.source,
-            origin: list.origin
+            meta: list.meta
         } satisfies PublicPlayerHit;
     }
 
@@ -141,4 +135,26 @@ export async function lookupPublicPlayer(params: {
     const club = await resolvePlayerClub({ nuid: params.nuid, name });
 
     return club ? tryClub(club) : null;
+}
+
+/** Öffentlicher TTR aus der Andro Rangliste des Vereins, ohne myTischtennis Login. */
+export async function getPublicPlayerRating(params: {
+    nuid: string;
+    name: string;
+    organization: string;
+    clubNumber: string;
+    clubName?: string;
+}) {
+    const hit = await lookupPublicPlayer(params);
+    const rating = hit ? toPublicRating(hit.player, String(hit.meta.fetchedAt)) : null;
+
+    return {
+        value: {
+            nuid: params.nuid,
+            available: rating !== null,
+            rating,
+            club: hit?.club ?? null
+        },
+        meta: hit ? hit.meta : ({ source: "upstream" } satisfies ResponseMeta)
+    };
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { readMeeting } from "../src/mytt/cachedReads.js";
+import { getMeeting } from "../src/services/meeting.js";
 import type { MeetingLiveResponse } from "../src/schemas.js";
 import { getStoreDb } from "../src/store/db.js";
 import { countStoredMeetings, getStoredMeeting, storeMeeting } from "../src/store/meetingStore.js";
@@ -57,11 +57,11 @@ describe("meeting store", () => {
             throw new Error("fetch must not be called");
         }) as typeof fetch;
 
-        const result = await readMeeting("200");
+        const result = await getMeeting("200");
 
-        assert.equal(result.source, "cache");
+        assert.equal(result.meta.source, "cache");
         assert.equal(result.value.data?.team_guest, "Guest");
-        assert.equal(result.fetchedAt, "2026-10-25T10:00:00.000Z");
+        assert.equal(result.meta.fetchedAt, "2026-10-25T10:00:00.000Z");
     });
 });
 

@@ -1,26 +1,16 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { readThrough, type CacheSource } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
 import {
     ASSOCIATIONS,
-    getLeagueSchedule,
-    getLeagueTable,
-    loadLeagueClasses,
-    loadLeagueRegions,
+    getLeagueClasses,
+    getLeagueRegions,
+    getLeagueScheduleData,
+    getLeagueTableData,
     normalizeSeason,
-    resolveAssociation
-} from "../mytt/index.js";
-import { isEmptyLeagueSchedule, isEmptyLeagueTable, ttlUnlessEmpty } from "../sources/validate.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
-
-const LEAGUE_DISCOVERY_TTL = {
-    ASSOCIATIONS: 24 * 60 * 60 * 1000,
-    REGIONS: 6 * 60 * 60 * 1000,
-    CLASSES: 60 * 60 * 1000
-};
-
-type ResponseSource = CacheSource | "static";
+    resolveAssociation,
+    type LeagueRef,
+    type RoundFilter
+} from "../services/league.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 
 function queryValue(value: unknown): string {
     if (Array.isArray(value)) {
@@ -30,7 +20,12 @@ function queryValue(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeFilter(value: string | undefined): RoundFilter {
+    return value === "vr" || value === "rr" || value === "gesamt" ? value : "gesamt";
+}
+
 async function sendRegionsResponse(
+    request: FastifyRequest,
     reply: FastifyReply,
     associationValue: string,
     seasonValue?: string
@@ -38,39 +33,24 @@ async function sendRegionsResponse(
     const associationRef = resolveAssociation(associationValue);
 
     if (!associationRef) {
-        return reply.code(400).send({
-            error: {
-                code: "INVALID_INPUT",
-                message: "association ist ungültig oder nicht unterstützt."
-            }
-        });
+        return sendInvalidInput(reply, "association ist ungültig oder nicht unterstützt.");
     }
 
-    const association = associationRef.association;
-    const season = normalizeSeason(seasonValue);
+    try {
+        const { value, meta } = await getLeagueRegions({
+            association: associationRef.association,
+            season: normalizeSeason(seasonValue)
+        });
 
-    // v2: ältere Einträge enthalten bei weiterleitenden Verbänden Gruppen statt Ebenen.
-    const cacheKey = `league-regions:v2:${association}:${season}`;
-    const result = await readThrough({
-        key: cacheKey,
-        ttlMs: ttlUnlessEmpty(
-            LEAGUE_DISCOVERY_TTL.REGIONS,
-            (value: { regions: unknown[] }) => value.regions.length === 0
-        ),
-        load: () => loadLeagueRegions(association, season)
-    });
-
-    return {
-        data: result.value.regions,
-        meta: {
-            ...buildMeta(result),
-            association,
-            season
-        }
-    };
+        return { data: value.regions, meta };
+    } catch (error) {
+        request.log.error(error);
+        return handleApiError(error, reply);
+    }
 }
 
 async function sendClassesResponse(
+    request: FastifyRequest,
     reply: FastifyReply,
     associationValue: string,
     seasonValue: string | undefined,
@@ -80,57 +60,60 @@ async function sendClassesResponse(
     const associationRef = resolveAssociation(associationValue);
 
     if (!associationRef) {
-        return reply.code(400).send({
-            error: {
-                code: "INVALID_INPUT",
-                message: "association ist ungültig oder nicht unterstützt."
-            }
-        });
+        return sendInvalidInput(reply, "association ist ungültig oder nicht unterstützt.");
     }
 
-    const association = associationRef.association;
-    const season = normalizeSeason(seasonValue);
     const championship = championshipValue.trim();
 
-    const competitionType =
-        competitionTypeValue === "pokalspiele" ? "pokalspiele" : "ligen";
-
     if (!championship) {
-        return reply.code(400).send({
-            error: {
-                code: "INVALID_INPUT",
-                message: "championship ist erforderlich. Verwende den championshipSlug aus /api/leagues/:association/regions."
-            }
-        });
+        return sendInvalidInput(
+            reply,
+            "championship ist erforderlich. Verwende den championshipSlug aus /api/leagues/:association/regions."
+        );
     }
 
-    const cacheKey = `league-classes:${association}:${season}:${competitionType}:${championship}`;
-    const result = await readThrough({
-        key: cacheKey,
-        ttlMs: ttlUnlessEmpty(
-            LEAGUE_DISCOVERY_TTL.CLASSES,
-            (value: { classes: unknown[] }) => value.classes.length === 0
-        ),
-        load: () =>
-            loadLeagueClasses({
-                association,
-                season,
-                championship,
-                competitionType
-            })
-    });
+    try {
+        const { value, meta } = await getLeagueClasses({
+            association: associationRef.association,
+            season: normalizeSeason(seasonValue),
+            championship,
+            competitionType: competitionTypeValue === "pokalspiele" ? "pokalspiele" : "ligen"
+        });
+
+        return { data: value.classes, sections: value.sections, meta };
+    } catch (error) {
+        request.log.error(error);
+        return handleApiError(error, reply);
+    }
+}
+
+/** Gemeinsame Eingaben von Tabelle und Spielplan einer Liga, oder null bei fehlenden Angaben. */
+function parseLeagueRef(request: FastifyRequest): LeagueRef | null {
+    const params = request.params as {
+        association?: string;
+        season?: string;
+        groupId?: string;
+    };
+
+    const query = request.query as {
+        leagueSlug?: string;
+        filter?: string;
+    };
+
+    const association = params.association?.trim().toUpperCase() ?? "";
+    const season = normalizeSeason(params.season);
+    const groupId = params.groupId?.trim() ?? "";
+
+    if (!association || !season || !groupId) {
+        return null;
+    }
 
     return {
-        data: result.value.classes,
-        sections: result.value.sections,
-        meta: {
-            ...buildMeta(result),
-            association,
-            season,
-            championship,
-            competitionType,
-            strategy: result.value.strategy
-        }
+        association,
+        season,
+        groupId,
+        leagueSlug: query.leagueSlug?.trim() || "x",
+        filter: normalizeFilter(query.filter)
     };
 }
 
@@ -139,7 +122,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         return {
             data: ASSOCIATIONS,
             meta: {
-                source: "static" satisfies ResponseSource
+                source: "static"
             }
         };
     });
@@ -158,7 +141,7 @@ export async function leagueRoutes(app: FastifyInstance) {
             return {
                 data: ASSOCIATIONS,
                 meta: {
-                    source: "static" satisfies ResponseSource,
+                    source: "static",
                     mode: "associations"
                 }
             };
@@ -166,6 +149,7 @@ export async function leagueRoutes(app: FastifyInstance) {
 
         if (championship) {
             return sendClassesResponse(
+                request,
                 reply,
                 regionOrAssociation,
                 season,
@@ -174,7 +158,7 @@ export async function leagueRoutes(app: FastifyInstance) {
             );
         }
 
-        return sendRegionsResponse(reply, regionOrAssociation, season);
+        return sendRegionsResponse(request, reply, regionOrAssociation, season);
     });
 
     app.get("/api/leagues/:association/regions", async (request, reply) => {
@@ -185,6 +169,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         const query = request.query as Record<string, unknown>;
 
         return sendRegionsResponse(
+            request,
             reply,
             params.association ?? "",
             queryValue(query.season)
@@ -198,6 +183,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         };
 
         return sendRegionsResponse(
+            request,
             reply,
             params.association ?? "",
             params.season
@@ -212,6 +198,7 @@ export async function leagueRoutes(app: FastifyInstance) {
         const query = request.query as Record<string, unknown>;
 
         return sendClassesResponse(
+            request,
             reply,
             params.association ?? "",
             queryValue(query.season),
@@ -220,154 +207,58 @@ export async function leagueRoutes(app: FastifyInstance) {
         );
     });
 
-    app.get("/api/leagues/:association/:season/classes", async (request, reply) => {
-        const params = request.params as {
-            association?: string;
-            season?: string;
-        };
+    // /classes und /hierarchy liefern dasselbe, hierarchy ist der ältere Name.
+    for (const name of ["classes", "hierarchy"]) {
+        app.get(`/api/leagues/:association/:season/${name}`, async (request, reply) => {
+            const params = request.params as {
+                association?: string;
+                season?: string;
+            };
 
-        const query = request.query as Record<string, unknown>;
+            const query = request.query as Record<string, unknown>;
 
-        return sendClassesResponse(
-            reply,
-            params.association ?? "",
-            params.season,
-            queryValue(query.championship),
-            queryValue(query.type)
-        );
-    });
-
-    app.get("/api/leagues/:association/:season/hierarchy", async (request, reply) => {
-        const params = request.params as {
-            association?: string;
-            season?: string;
-        };
-
-        const query = request.query as Record<string, unknown>;
-
-        return sendClassesResponse(
-            reply,
-            params.association ?? "",
-            params.season,
-            queryValue(query.championship),
-            queryValue(query.type)
-        );
-    });
+            return sendClassesResponse(
+                request,
+                reply,
+                params.association ?? "",
+                params.season,
+                queryValue(query.championship),
+                queryValue(query.type)
+            );
+        });
+    }
 
     app.get("/api/leagues/:association/:season/:groupId/table", async (request, reply) => {
-        const params = request.params as {
-            association?: string;
-            season?: string;
-            groupId?: string;
-        };
+        const league = parseLeagueRef(request);
 
-        const query = request.query as {
-            leagueSlug?: string;
-            filter?: string;
-        };
-
-        const association = params.association?.trim().toUpperCase() ?? "";
-        const season = normalizeSeason(params.season);
-        const groupId = params.groupId?.trim() ?? "";
-        const leagueSlug = query.leagueSlug?.trim() || "x";
-
-        const filter =
-            query.filter === "vr" ||
-            query.filter === "rr" ||
-            query.filter === "gesamt"
-                ? query.filter
-                : "gesamt";
-
-        if (!association || !season || !groupId) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "association, season und groupId sind erforderlich."
-                }
-            });
+        if (!league) {
+            return sendInvalidInput(reply, "association, season und groupId sind erforderlich.");
         }
 
         try {
-            const result = await readThrough({
-                key: `league-table:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
-                ttlMs: ttlUnlessEmpty(CACHE_TTL.LEAGUE_TABLE, isEmptyLeagueTable),
-                load: () =>
-                    getLeagueTable({
-                        association,
-                        season,
-                        groupId,
-                        leagueSlug,
-                        filter
-                    })
-            });
+            const { value, meta } = await getLeagueTableData(league);
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
         }
     });
 
-    app.get(
-        "/api/leagues/:association/:season/:groupId/schedule",
-        async (request, reply) => {
-            const params = request.params as {
-                association?: string;
-                season?: string;
-                groupId?: string;
-            };
+    app.get("/api/leagues/:association/:season/:groupId/schedule", async (request, reply) => {
+        const league = parseLeagueRef(request);
 
-            const query = request.query as {
-                leagueSlug?: string;
-                filter?: string;
-            };
-
-            const association = params.association?.trim().toUpperCase() ?? "";
-            const season = normalizeSeason(params.season);
-            const groupId = params.groupId?.trim() ?? "";
-            const leagueSlug = query.leagueSlug?.trim() || "x";
-
-            const filter =
-                query.filter === "vr" ||
-                query.filter === "rr" ||
-                query.filter === "gesamt"
-                    ? query.filter
-                    : "gesamt";
-
-            if (!association || !season || !groupId) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "association, season und groupId sind erforderlich."
-                    }
-                });
-            }
-
-            try {
-                const result = await readThrough({
-                    key: `league-schedule:${association}:${season}:${groupId}:${leagueSlug}:${filter}`,
-                    ttlMs: ttlUnlessEmpty(CACHE_TTL.LEAGUE_SCHEDULE, isEmptyLeagueSchedule),
-                    load: () =>
-                        getLeagueSchedule({
-                            association,
-                            season,
-                            groupId,
-                            leagueSlug,
-                            filter
-                        })
-                });
-
-                return {
-                    data: result.value,
-                    meta: buildMeta(result)
-                };
-            } catch (error) {
-                request.log.error(error);
-                return handleApiError(error, reply);
-            }
+        if (!league) {
+            return sendInvalidInput(reply, "association, season und groupId sind erforderlich.");
         }
-    );
+
+        try {
+            const { value, meta } = await getLeagueScheduleData(league);
+
+            return { data: value, meta };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
 }

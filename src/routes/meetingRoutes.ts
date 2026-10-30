@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { getMeetingTtlMs, readMeeting } from "../mytt/cachedReads.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+import { getMeeting } from "../services/meeting.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 
 export async function meetingRoutes(app: FastifyInstance) {
     app.get("/api/meetings/:meetingId/live", async (request, reply) => {
@@ -12,23 +11,13 @@ export async function meetingRoutes(app: FastifyInstance) {
         const meetingId = params.meetingId?.trim() ?? "";
 
         if (!meetingId) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "meetingId ist erforderlich."
-                }
-            });
+            return sendInvalidInput(reply, "meetingId ist erforderlich.");
         }
 
         try {
-            const result = await readMeeting(meetingId);
+            const { value, meta } = await getMeeting(meetingId);
 
-            return {
-                data: result.value,
-                meta: buildMeta(result, {
-                    cacheTtlMs: getMeetingTtlMs(result.value)
-                })
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);

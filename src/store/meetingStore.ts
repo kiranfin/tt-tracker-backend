@@ -1,17 +1,16 @@
-import { getMeetingTtlMs } from "../mytt/meetingTtl.js";
-import { CACHE_TTL } from "../constants.js";
+import { getFreshMs, MEETING_COMPLETED_FRESH_MS } from "../policies.js";
 import type { MeetingLiveResponse } from "../schemas.js";
 import { getStoreDb } from "./db.js";
 
 /**
  * Nur abgeschlossene Berichte kommen in die Ablage: laufende und geplante ändern sich noch.
- * Die Regel hängt an derselben TTL Funktion wie der Cache, damit beide dasselbe als "fertig" ansehen.
+ * Die Regel hängt an derselben Policy wie der Cache, damit beide dasselbe als "fertig" ansehen.
  */
 export function isStorableMeeting(response: MeetingLiveResponse) {
     return (
         response.data?.is_completed === true &&
         response.data.live !== true &&
-        getMeetingTtlMs(response) === CACHE_TTL.MEETING_COMPLETED
+        getFreshMs("MEETING", response) === MEETING_COMPLETED_FRESH_MS
     );
 }
 

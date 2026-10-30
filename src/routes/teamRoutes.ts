@@ -1,29 +1,15 @@
-import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache/index.js";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
-    getTeamBalances,
-    getTeamInfos,
-    getTeamPlayers,
-    getTeamSchedule,
-    getTeamSimpleSchedule
-} from "../mytt/index.js";
-import {
-    isEmptyTeamBalances,
-    isEmptyTeamSchedule,
-    ttlUnlessEmpty
-} from "../sources/validate.js";
-import { handleApiError } from "../utils/errors.js";
-import { buildMeta } from "../utils/responseMeta.js";
+    getTeamBalanceData,
+    getTeamInfoData,
+    getTeamPlayerList,
+    getTeamScheduleData,
+    getTeamSimpleScheduleData,
+    type TeamRef
+} from "../services/team.js";
+import { handleApiError, sendInvalidInput } from "../utils/errors.js";
 
 const DEFAULT_SEASON = "25--26";
-
-const TEAM_CACHE_TTL = {
-    PLAYERS: 10 * 60 * 1000,
-    SIMPLE_SCHEDULE: 5 * 60 * 1000,
-    INFOS: 15 * 60 * 1000,
-    SCHEDULE: 5 * 60 * 1000,
-    BALANCES: 5 * 60 * 1000
-};
 
 type RoundFilter = "gesamt" | "vr" | "rr";
 
@@ -53,10 +39,6 @@ function normalizeFilter(value: string | undefined): RoundFilter {
     return "gesamt";
 }
 
-function normalizeAssociation(value: string | undefined): string {
-    return value?.trim().toUpperCase() ?? "";
-}
-
 function normalizeRequiredParam(value: string | undefined): string {
     return value?.trim() ?? "";
 }
@@ -67,6 +49,31 @@ function normalizeSlug(value: string | undefined, fallback = "x"): string {
     return slug && slug.length > 0 ? slug : fallback;
 }
 
+/** Mannschaft aus Pfad und Query, oder null bei fehlenden Angaben. */
+function parseTeamRef(request: FastifyRequest): TeamRef | null {
+    const params = request.params as {
+        association?: string;
+        season?: string;
+        groupId?: string;
+        teamId?: string;
+    };
+
+    const query = request.query as Record<string, unknown>;
+
+    const team = {
+        association: params.association?.trim().toUpperCase() ?? "",
+        season: normalizeSeason(params.season),
+        groupId: normalizeRequiredParam(params.groupId),
+        teamId: normalizeRequiredParam(params.teamId),
+        leagueSlug: normalizeSlug(queryValue(query.leagueSlug)),
+        teamNameSlug: normalizeSlug(queryValue(query.teamNameSlug))
+    };
+
+    return team.association && team.season && team.groupId && team.teamId ? team : null;
+}
+
+const TEAM_REF_ERROR = "association, season, groupId und teamId sind erforderlich.";
+
 export async function teamRoutes(app: FastifyInstance) {
     app.get("/api/teams/:teamId/players", async (request, reply) => {
         const params = request.params as {
@@ -76,25 +83,13 @@ export async function teamRoutes(app: FastifyInstance) {
         const teamId = normalizeRequiredParam(params.teamId);
 
         if (!teamId) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "teamId ist erforderlich."
-                }
-            });
+            return sendInvalidInput(reply, "teamId ist erforderlich.");
         }
 
         try {
-            const result = await readThrough({
-                key: `team-players:${teamId}`,
-                ttlMs: TEAM_CACHE_TTL.PLAYERS,
-                load: () => getTeamPlayers({ teamId })
-            });
+            const { value, meta } = await getTeamPlayerList(teamId);
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
@@ -112,194 +107,71 @@ export async function teamRoutes(app: FastifyInstance) {
         const season = normalizeSeason(queryValue(query.season));
 
         if (!teamId) {
-            return reply.code(400).send({
-                error: {
-                    code: "INVALID_INPUT",
-                    message: "teamId ist erforderlich."
-                }
-            });
+            return sendInvalidInput(reply, "teamId ist erforderlich.");
         }
 
         try {
-            const result = await readThrough({
-                key: `team-simple-schedule:${teamId}:${season}`,
-                ttlMs: TEAM_CACHE_TTL.SIMPLE_SCHEDULE,
-                load: () => getTeamSimpleSchedule({ teamId, season })
-            });
+            const { value, meta } = await getTeamSimpleScheduleData(teamId, season);
 
-            return {
-                data: result.value,
-                meta: buildMeta(result)
-            };
+            return { data: value, meta };
         } catch (error) {
             request.log.error(error);
             return handleApiError(error, reply);
         }
     });
 
-    app.get(
-        "/api/teams/:association/:season/:groupId/:teamId/infos",
-        async (request, reply) => {
-            const params = request.params as {
-                association?: string;
-                season?: string;
-                groupId?: string;
-                teamId?: string;
-            };
+    app.get("/api/teams/:association/:season/:groupId/:teamId/infos", async (request, reply) => {
+        const team = parseTeamRef(request);
 
-            const query = request.query as Record<string, unknown>;
-
-            const association = normalizeAssociation(params.association);
-            const season = normalizeSeason(params.season);
-            const groupId = normalizeRequiredParam(params.groupId);
-            const teamId = normalizeRequiredParam(params.teamId);
-            const leagueSlug = normalizeSlug(queryValue(query.leagueSlug));
-            const teamNameSlug = normalizeSlug(queryValue(query.teamNameSlug));
-
-            if (!association || !season || !groupId || !teamId) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "association, season, groupId und teamId sind erforderlich."
-                    }
-                });
-            }
-
-            try {
-                const result = await readThrough({
-                    key: `team-infos:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}`,
-                    ttlMs: TEAM_CACHE_TTL.INFOS,
-                    load: () =>
-                        getTeamInfos({
-                            association,
-                            season,
-                            groupId,
-                            leagueSlug,
-                            teamId,
-                            teamNameSlug
-                        })
-                });
-
-                return {
-                    data: result.value,
-                    meta: buildMeta(result)
-                };
-            } catch (error) {
-                request.log.error(error);
-                return handleApiError(error, reply);
-            }
+        if (!team) {
+            return sendInvalidInput(reply, TEAM_REF_ERROR);
         }
-    );
 
-    app.get(
-        "/api/teams/:association/:season/:groupId/:teamId/schedule",
-        async (request, reply) => {
-            const params = request.params as {
-                association?: string;
-                season?: string;
-                groupId?: string;
-                teamId?: string;
-            };
+        try {
+            const { value, meta } = await getTeamInfoData(team);
 
-            const query = request.query as Record<string, unknown>;
-
-            const association = normalizeAssociation(params.association);
-            const season = normalizeSeason(params.season);
-            const groupId = normalizeRequiredParam(params.groupId);
-            const teamId = normalizeRequiredParam(params.teamId);
-            const leagueSlug = normalizeSlug(queryValue(query.leagueSlug));
-            const teamNameSlug = normalizeSlug(queryValue(query.teamNameSlug));
-            const filter = normalizeFilter(queryValue(query.filter));
-
-            if (!association || !season || !groupId || !teamId) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "association, season, groupId und teamId sind erforderlich."
-                    }
-                });
-            }
-
-            try {
-                const result = await readThrough({
-                    key: `team-schedule:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
-                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.SCHEDULE, isEmptyTeamSchedule),
-                    load: () =>
-                        getTeamSchedule({
-                            association,
-                            season,
-                            groupId,
-                            leagueSlug,
-                            teamId,
-                            teamNameSlug,
-                            filter
-                        })
-                });
-
-                return {
-                    data: result.value,
-                    meta: buildMeta(result)
-                };
-            } catch (error) {
-                request.log.error(error);
-                return handleApiError(error, reply);
-            }
+            return { data: value, meta };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
         }
-    );
+    });
 
-    app.get(
-        "/api/teams/:association/:season/:groupId/:teamId/balances",
-        async (request, reply) => {
-            const params = request.params as {
-                association?: string;
-                season?: string;
-                groupId?: string;
-                teamId?: string;
-            };
+    app.get("/api/teams/:association/:season/:groupId/:teamId/schedule", async (request, reply) => {
+        const team = parseTeamRef(request);
 
-            const query = request.query as Record<string, unknown>;
-
-            const association = normalizeAssociation(params.association);
-            const season = normalizeSeason(params.season);
-            const groupId = normalizeRequiredParam(params.groupId);
-            const teamId = normalizeRequiredParam(params.teamId);
-            const leagueSlug = normalizeSlug(queryValue(query.leagueSlug));
-            const teamNameSlug = normalizeSlug(queryValue(query.teamNameSlug));
-            const filter = normalizeFilter(queryValue(query.filter));
-
-            if (!association || !season || !groupId || !teamId) {
-                return reply.code(400).send({
-                    error: {
-                        code: "INVALID_INPUT",
-                        message: "association, season, groupId und teamId sind erforderlich."
-                    }
-                });
-            }
-
-            try {
-                const result = await readThrough({
-                    key: `team-balances:${association}:${season}:${groupId}:${leagueSlug}:${teamId}:${teamNameSlug}:${filter}`,
-                    ttlMs: ttlUnlessEmpty(TEAM_CACHE_TTL.BALANCES, isEmptyTeamBalances),
-                    load: () =>
-                        getTeamBalances({
-                            association,
-                            season,
-                            groupId,
-                            leagueSlug,
-                            teamId,
-                            teamNameSlug,
-                            filter
-                        })
-                });
-
-                return {
-                    data: result.value,
-                    meta: buildMeta(result)
-                };
-            } catch (error) {
-                request.log.error(error);
-                return handleApiError(error, reply);
-            }
+        if (!team) {
+            return sendInvalidInput(reply, TEAM_REF_ERROR);
         }
-    );
+
+        const filter = normalizeFilter(queryValue((request.query as Record<string, unknown>).filter));
+
+        try {
+            const { value, meta } = await getTeamScheduleData(team, filter);
+
+            return { data: value, meta };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
+    app.get("/api/teams/:association/:season/:groupId/:teamId/balances", async (request, reply) => {
+        const team = parseTeamRef(request);
+
+        if (!team) {
+            return sendInvalidInput(reply, TEAM_REF_ERROR);
+        }
+
+        const filter = normalizeFilter(queryValue((request.query as Record<string, unknown>).filter));
+
+        try {
+            const { value, meta } = await getTeamBalanceData(team, filter);
+
+            return { data: value, meta };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
 }
