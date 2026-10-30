@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { buildTimeline, type RatedSingle } from "../src/rating/estimate.js";
 import { expectedResult, kFactor, ratingChange } from "../src/rating/formula.js";
 import { extractPlayerSingles } from "../src/rating/playerMatches.js";
+import { isTemporarilyBlocked } from "../src/rating/playerEstimate.js";
+import { LocalRateLimitError, UpstreamError, UpstreamRateLimitError } from "../src/upstream/errors.js";
 import type { MeetingLiveData } from "../src/schemas.js";
 
 describe("ttr formula", () => {
@@ -149,5 +151,18 @@ describe("extractPlayerSingles", () => {
     it("skips doubles, walkovers and other players", () => {
         assert.equal(extractPlayerSingles(MEETING, "1", "NU4").length, 1);
         assert.equal(extractPlayerSingles(MEETING, "1", "NU999").length, 0);
+    });
+});
+
+describe("isTemporarilyBlocked", () => {
+    it("aborts the estimate while myTischtennis is throttled", () => {
+        assert.equal(isTemporarilyBlocked(new LocalRateLimitError(60_000, "breaker_open")), true);
+        assert.equal(isTemporarilyBlocked(new LocalRateLimitError(5_000, "queue_full")), true);
+        assert.equal(isTemporarilyBlocked(new UpstreamRateLimitError()), true);
+    });
+
+    it("skips single broken reports instead of aborting", () => {
+        assert.equal(isTemporarilyBlocked(new UpstreamError("not found", 404)), false);
+        assert.equal(isTemporarilyBlocked(new Error("boom")), false);
     });
 });

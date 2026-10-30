@@ -4,6 +4,7 @@ import { readClubPlayers } from "../mytt/clubPlayersCache.js";
 import { lookupPublicPlayer } from "../mytt/playerLookup.js";
 import { normalizePlayerId, toPublicRating, type PlayerRating } from "../mytt/rating.js";
 import { asNullableNumber } from "../mytt/values.js";
+import { LocalRateLimitError, UpstreamRateLimitError } from "../upstream/errors.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 import { buildTimeline, type EstimatedEvent, type RatedSingle } from "./estimate.js";
 import { BASE_K } from "./formula.js";
@@ -34,6 +35,15 @@ export type PlayerTtrEstimate = {
         lagDays: number;
     };
 };
+
+/**
+ * myTischtennis bremst gerade oder der Breaker ist offen. Dann fehlen nicht einzelne Berichte, sondern
+ * alle weiteren: eine Schätzung daraus wäre unvollständig und würde 30 Minuten lang die letzte gute
+ * überdecken. Lieber abbrechen, dann liefert der Cache die vorige Schätzung als stale.
+ */
+export function isTemporarilyBlocked(error: unknown) {
+    return error instanceof LocalRateLimitError || error instanceof UpstreamRateLimitError;
+}
 
 async function mapWithConcurrency<T, R>(
     items: T[],
@@ -104,7 +114,9 @@ async function loadOpponentRatings(singles: PlayerSingle[]) {
                     ratings.set(id, ttr);
                 }
             }
-        } catch {
+        } catch (error) {
+            if (isTemporarilyBlocked(error)) throw error;
+
             // Ein Verein ohne Liste lässt nur seine Spieler als "ohne Wert" zurück.
         }
     });
@@ -178,7 +190,9 @@ export async function estimatePlayerTtr(params: {
             const report = await readMeeting(meeting.id);
 
             return report.value.data ? extractPlayerSingles(report.value.data, meeting.id, params.nuid) : [];
-        } catch {
+        } catch (error) {
+            if (isTemporarilyBlocked(error)) throw error;
+
             return [];
         }
     });
