@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
 import { UpstreamDisabledError, UpstreamError } from "./errors.js";
+import { getUpstreamPriority } from "./priority.js";
 import { acquireUpstreamSlot, getUpstreamLane, reportUpstreamResult } from "./rateLimiter.js";
 import { trackUpstreamRequest } from "./tracker.js";
 
@@ -81,8 +82,11 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
     const context = getRequestContext();
     const url = request.url.toString();
 
+    const priority = getUpstreamPriority();
+
     const logBase = {
         requestId: context?.requestId,
+        priority,
         clientIp: context?.ip,
         backendMethod: context?.method,
         backendUrl: context?.url,
@@ -96,7 +100,7 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
     let release: () => void;
 
     try {
-        release = await acquireUpstreamSlot({ lane, counted });
+        release = await acquireUpstreamSlot({ lane, counted, priority });
     } catch (error) {
         void writeJsonLog("mytt_upstream_blocked", {
             ...logBase,

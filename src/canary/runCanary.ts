@@ -5,6 +5,7 @@ import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { MailNotConfiguredError, sendAlertEmail } from "../mailer.js";
 import { getJsonFromMytt } from "../mytt/request.js";
+import { runInBackground } from "../upstream/priority.js";
 import { fetchHtmlPage } from "../sources/html/fetchPage.js";
 import { getRouteDataFromHtml, type JsonRecord } from "../sources/html/remixContext.js";
 import { CANARY_PROBES, type CanaryProbe } from "./probes.js";
@@ -213,7 +214,8 @@ export function createCanary(deps: CanaryDeps) {
 
         // Nacheinander: alle Requests laufen ohnehin durch den Throttle.
         for (const probe of deps.probes) {
-            const { result, html } = await runProbe(probe, deps);
+            // Hintergrundarbeit: Nutzeranfragen gehen vor.
+            const { result, html } = await runInBackground(() => runProbe(probe, deps));
 
             if (result.status !== "ok") {
                 if (html) {

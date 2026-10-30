@@ -4,7 +4,15 @@ import { readClubPlayers } from "../mytt/clubPlayersCache.js";
 import { lookupPublicPlayer } from "../mytt/playerLookup.js";
 import { normalizePlayerId, toPublicRating, type PlayerRating } from "../mytt/rating.js";
 import { asNullableNumber } from "../mytt/values.js";
+import { hasStoredMeeting } from "../store/meetingStore.js";
+import {
+    getOpponentRatings,
+    opponentRatingKey,
+    saveOpponentRatings,
+    type OpponentRatingRow
+} from "../store/opponentRatingStore.js";
 import { LocalRateLimitError, UpstreamRateLimitError } from "../upstream/errors.js";
+import { runInBackground } from "../upstream/priority.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 import { buildTimeline, type EstimatedEvent, type RatedSingle } from "./estimate.js";
 import { BASE_K } from "./formula.js";
@@ -29,6 +37,11 @@ export type PlayerTtrEstimate = {
         /** Einzel, deren Gegner keinen öffentlichen Wert in der Vereinsliste hatte. */
         singlesUnrated: number;
         truncated: boolean;
+        /**
+         * Berichte und Einzel, die diese Anfrage wegen ihres Budgets noch nicht geschafft hat. Ist der Wert
+         * größer als 0, ist die Schätzung unvollständig und der nächste Aufruf rechnet weiter.
+         */
+        pending: number;
     };
     assumptions: {
         k: number;
@@ -66,6 +79,48 @@ async function mapWithConcurrency<T, R>(
     return results;
 }
 
+/**
+ * Teilt die vergangenen Begegnungen (neueste zuerst) auf: abgelegte kosten nichts und kommen alle mit,
+ * von den fehlenden werden höchstens `budget` geladen, und zwar die neuesten. `pending` ist die Zahl
+ * der fehlenden, die danach noch übrig bleiben.
+ */
+export function planMeetingScan<T extends { id: string }>(
+    pastMeetings: T[],
+    isStored: (meetingId: string) => boolean,
+    budget: number
+) {
+    const fromStore: T[] = [];
+    const missing: T[] = [];
+
+    for (const meeting of pastMeetings) {
+        (isStored(meeting.id) ? fromStore : missing).push(meeting);
+    }
+
+    const toLoad = missing.slice(0, Math.max(0, budget));
+
+    return { fromStore, toLoad, pending: missing.length - toLoad.length };
+}
+
+// Vergangene Berichte, die nicht abgeschlossen oder nicht ladbar sind (verlegt, noch nicht eingetragen).
+// Sie würden sonst bei jeder Anfrage das Budget der neuesten Berichte aufbrauchen und die älteren blockieren.
+const UNFINISHED_RETRY_MS = 60 * 60 * 1000;
+const unfinishedMeetings = new Map<string, number>();
+
+function isSkippedForNow(meetingId: string, now: number) {
+    const retryAt = unfinishedMeetings.get(meetingId);
+
+    if (retryAt === undefined) {
+        return false;
+    }
+
+    if (now >= retryAt) {
+        unfinishedMeetings.delete(meetingId);
+        return false;
+    }
+
+    return true;
+}
+
 function meetingTimestamp(meeting: Record<string, unknown>) {
     const timestamp = typeof meeting.date === "string" ? Date.parse(meeting.date) : Number.NaN;
 
@@ -83,11 +138,30 @@ function getPastMeetingIds(schedule: Parameters<typeof getClubScheduleMeetings>[
         .sort((left, right) => right.timestamp - left.timestamp);
 }
 
-/** Öffentliche Werte der Gegner, nach Person gesucht in den (gecachten) Vereinslisten. */
+/**
+ * Werte der Gegner pro Einzel (Schlüssel aus `keyOf`). Gespeicherte Werte bleiben, wie sie beim ersten
+ * Bewerten waren. Nur für Einzel ohne gespeicherten Wert werden die (gecachten) Vereinslisten geladen
+ * und die gefundenen Werte sofort gespeichert. `deferred` zählt Einzel, deren Verein wegen der
+ * Obergrenze erst beim nächsten Aufruf drankommt.
+ */
 async function loadOpponentRatings(singles: PlayerSingle[]) {
+    const keyOf = (single: PlayerSingle) =>
+        opponentRatingKey({
+            meetingId: single.meetingId,
+            personId: normalizePlayerId(single.opponent.personId)
+        });
+
+    const ratings = getOpponentRatings(
+        singles.map((single) => ({
+            meetingId: single.meetingId,
+            personId: normalizePlayerId(single.opponent.personId)
+        }))
+    );
+
+    const open = singles.filter((single) => !ratings.has(keyOf(single)));
     const clubs = new Map<string, { organization: string; clubNumber: string; clubName?: string }>();
 
-    for (const single of singles) {
+    for (const single of open) {
         const { organization, clubNumber, clubName } = single.opponent;
 
         if (organization && clubNumber) {
@@ -99,29 +173,54 @@ async function loadOpponentRatings(singles: PlayerSingle[]) {
         }
     }
 
-    const wanted = [...clubs.values()].slice(0, TTR_ESTIMATE.MAX_OPPONENT_CLUBS);
-    const ratings = new Map<string, number>();
+    const allClubs = [...clubs.entries()];
+    const wanted = allClubs.slice(0, TTR_ESTIMATE.MAX_OPPONENT_CLUBS);
+    const deferredClubs = new Set(allClubs.slice(TTR_ESTIMATE.MAX_OPPONENT_CLUBS).map(([key]) => key));
+    const current = new Map<string, number>();
 
-    await mapWithConcurrency(wanted, TTR_ESTIMATE.CONCURRENCY, async (club) => {
-        try {
-            const list = await readClubPlayers(club);
+    await mapWithConcurrency(wanted, TTR_ESTIMATE.CONCURRENCY, ([, club]) =>
+        runInBackground(async () => {
+            try {
+                const list = await readClubPlayers(club);
 
-            for (const player of list.value.data) {
-                const ttr = asNullableNumber(player.ttr);
-                const id = normalizePlayerId(player.person_id);
+                for (const player of list.value.data) {
+                    const ttr = asNullableNumber(player.ttr);
+                    const id = normalizePlayerId(player.person_id);
 
-                if (ttr !== null && id) {
-                    ratings.set(id, ttr);
+                    if (ttr !== null && id) {
+                        current.set(id, ttr);
+                    }
                 }
+            } catch (error) {
+                if (isTemporarilyBlocked(error)) throw error;
+
+                // Ein Verein ohne Liste lässt nur seine Spieler als "ohne Wert" zurück.
             }
-        } catch (error) {
-            if (isTemporarilyBlocked(error)) throw error;
+        })
+    );
 
-            // Ein Verein ohne Liste lässt nur seine Spieler als "ohne Wert" zurück.
+    const fresh: OpponentRatingRow[] = [];
+    let deferred = 0;
+
+    for (const single of open) {
+        const personId = normalizePlayerId(single.opponent.personId);
+        const ttr = current.get(personId);
+
+        if (ttr !== undefined) {
+            ratings.set(keyOf(single), ttr);
+            fresh.push({ meetingId: single.meetingId, personId, ttr });
+        } else if (
+            single.opponent.organization &&
+            single.opponent.clubNumber &&
+            deferredClubs.has(`${single.opponent.organization}:${single.opponent.clubNumber}`)
+        ) {
+            deferred += 1;
         }
-    });
+    }
 
-    return ratings;
+    saveOpponentRatings(fresh);
+
+    return { ratings, keyOf, deferred };
 }
 
 export async function estimatePlayerTtr(params: {
@@ -149,6 +248,7 @@ export async function estimatePlayerTtr(params: {
             singlesRated: 0,
             singlesUnrated: 0,
             truncated: false,
+            pending: 0,
             ...coverage
         },
         assumptions: { k: BASE_K, lagDays }
@@ -183,27 +283,49 @@ export async function estimatePlayerTtr(params: {
     });
 
     const pastMeetings = getPastMeetingIds(schedule.value, now);
-    const scanned = pastMeetings.slice(0, TTR_ESTIMATE.MAX_MEETINGS);
+    const candidates = pastMeetings
+        .slice(0, TTR_ESTIMATE.MAX_MEETINGS)
+        .filter((meeting) => !isSkippedForNow(meeting.id, now));
+
+    const plan = planMeetingScan(candidates, hasStoredMeeting, TTR_ESTIMATE.MAX_NEW_MEETINGS);
+    const scanned = [...plan.fromStore, ...plan.toLoad];
+    const loading = new Set(plan.toLoad.map((meeting) => meeting.id));
 
     const reports = await mapWithConcurrency(scanned, TTR_ESTIMATE.CONCURRENCY, async (meeting) => {
-        try {
-            const report = await readMeeting(meeting.id);
+        const isNew = loading.has(meeting.id);
 
-            return report.value.data ? extractPlayerSingles(report.value.data, meeting.id, params.nuid) : [];
-        } catch (error) {
-            if (isTemporarilyBlocked(error)) throw error;
+        const read = async () => {
+            try {
+                const report = await readMeeting(meeting.id);
 
-            return [];
-        }
+                // Nicht abgelegt heißt nicht abgeschlossen: nicht bei jeder Anfrage erneut versuchen.
+                if (isNew && !hasStoredMeeting(meeting.id)) {
+                    unfinishedMeetings.set(meeting.id, now + UNFINISHED_RETRY_MS);
+                }
+
+                return report.value.data ? extractPlayerSingles(report.value.data, meeting.id, params.nuid) : [];
+            } catch (error) {
+                if (isTemporarilyBlocked(error)) throw error;
+
+                if (isNew) {
+                    unfinishedMeetings.set(meeting.id, now + UNFINISHED_RETRY_MS);
+                }
+
+                return [];
+            }
+        };
+
+        // Abgelegte Berichte kosten keinen Upstream Request, nur neue laufen als Hintergrundarbeit.
+        return isNew ? runInBackground(read) : read();
     });
 
     const singles = reports.flat();
-    const opponentRatings = await loadOpponentRatings(singles);
+    const opponents = await loadOpponentRatings(singles);
 
     const rated: RatedSingle[] = [];
 
     for (const single of singles) {
-        const opponentTtr = opponentRatings.get(normalizePlayerId(single.opponent.personId));
+        const opponentTtr = opponents.ratings.get(opponents.keyOf(single));
 
         if (opponentTtr !== undefined) {
             rated.push({ ...single, opponentTtr });
@@ -232,7 +354,8 @@ export async function estimatePlayerTtr(params: {
             singlesFound: singles.length,
             singlesRated: rated.length,
             singlesUnrated: singles.length - rated.length,
-            truncated: pastMeetings.length > scanned.length
+            truncated: pastMeetings.length > scanned.length,
+            pending: plan.pending + opponents.deferred
         },
         assumptions: { k: BASE_K, lagDays }
     };

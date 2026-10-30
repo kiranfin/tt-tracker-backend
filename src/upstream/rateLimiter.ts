@@ -2,7 +2,9 @@ import { config } from "../config.js";
 import { CircuitBreaker, type UpstreamResult } from "./circuitBreaker.js";
 import { LocalRateLimitError } from "./errors.js";
 import { RequestWindow } from "./requestWindow.js";
-import { Throttle, type Release } from "./throttle.js";
+import { writeJsonLog } from "../fileLogger.js";
+import type { UpstreamPriority } from "./priority.js";
+import { Throttle, type PaceChange, type Release } from "./throttle.js";
 
 /**
  * myTischtennis hat zwei getrennt ausfallende Teile: die JSON API unter /api/* (Suche, TTR,
@@ -94,6 +96,7 @@ function assertBreakerClosed(lane: UpstreamLane) {
 export async function acquireUpstreamSlot(options: {
     lane: UpstreamLane;
     counted?: boolean;
+    priority?: UpstreamPriority;
 }): Promise<Release> {
     assertBreakerClosed(options.lane);
 
@@ -103,7 +106,7 @@ export async function acquireUpstreamSlot(options: {
 
     requestWindow.assertAvailable();
 
-    const release = await throttle.acquire();
+    const release = await throttle.acquire(options.priority);
 
     // Während des Wartens kann der Breaker aufgegangen sein.
     try {
@@ -118,12 +121,26 @@ export async function acquireUpstreamSlot(options: {
     return release;
 }
 
+function logPaceChange(change: PaceChange | null, reason: "rate_limited" | "recovered") {
+    if (!change) {
+        return;
+    }
+
+    void writeJsonLog("mytt_pace_changed", {
+        reason,
+        fromIntervalMs: change.from,
+        toIntervalMs: change.to
+    });
+}
+
 /** Meldet das Ergebnis eines Upstream Calls an den Breaker (auch für nicht gezählte Calls). */
 export function reportUpstreamResult(
     result: UpstreamResult & { lane: UpstreamLane; rateLimitHeader?: string | null }
 ) {
     // Ein 429 gilt für die ganze Seite, nicht nur für die API oder die Webseite.
     if (result.status === 429) {
+        logPaceChange(throttle.slowDown(), "rate_limited");
+
         for (const breaker of Object.values(breakers)) {
             breaker.report(result);
         }
@@ -135,6 +152,10 @@ export function reportUpstreamResult(
     }
 
     breakers[result.lane].report(result);
+
+    if (result.status !== undefined && result.status >= 200 && result.status < 300) {
+        logPaceChange(throttle.recordSuccess(), "recovered");
+    }
 
     const quota = parseRateLimitHeader(result.rateLimitHeader);
 

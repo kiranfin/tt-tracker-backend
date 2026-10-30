@@ -846,7 +846,11 @@ export async function playerRoutes(app: FastifyInstance) {
 
             const cached = await readThrough({
                 key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}:${name ?? ""}`,
-                ttlMs: CACHE_TTL.PLAYER_TTR_ESTIMATE,
+                // Unvollständig (pending): nur kurz cachen, der nächste Aufruf lädt die nächste Etappe.
+                ttlMs: (estimate) =>
+                    estimate.coverage.pending > 0
+                        ? CACHE_TTL.EMPTY_RESULT
+                        : CACHE_TTL.PLAYER_TTR_ESTIMATE,
                 load: () =>
                     estimatePlayerTtr({ nuid, organization, clubNumber, clubName, name })
             });

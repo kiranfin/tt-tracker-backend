@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { buildTimeline, type RatedSingle } from "../src/rating/estimate.js";
 import { expectedResult, kFactor, ratingChange } from "../src/rating/formula.js";
 import { extractPlayerSingles } from "../src/rating/playerMatches.js";
-import { isTemporarilyBlocked } from "../src/rating/playerEstimate.js";
+import { isTemporarilyBlocked, planMeetingScan } from "../src/rating/playerEstimate.js";
 import { LocalRateLimitError, UpstreamError, UpstreamRateLimitError } from "../src/upstream/errors.js";
 import type { MeetingLiveData } from "../src/schemas.js";
 
@@ -164,5 +164,33 @@ describe("isTemporarilyBlocked", () => {
     it("skips single broken reports instead of aborting", () => {
         assert.equal(isTemporarilyBlocked(new UpstreamError("not found", 404)), false);
         assert.equal(isTemporarilyBlocked(new Error("boom")), false);
+    });
+});
+
+describe("planMeetingScan", () => {
+    // Neueste zuerst, wie getPastMeetingIds sie liefert.
+    const meetings = ["m6", "m5", "m4", "m3", "m2", "m1"].map((id) => ({ id }));
+
+    it("takes all stored reports and loads the newest missing ones up to the budget", () => {
+        const stored = new Set(["m5", "m2", "m1"]);
+        const plan = planMeetingScan(meetings, (id) => stored.has(id), 2);
+
+        assert.deepEqual(plan.fromStore.map((meeting) => meeting.id), ["m5", "m2", "m1"]);
+        assert.deepEqual(plan.toLoad.map((meeting) => meeting.id), ["m6", "m4"]);
+        assert.equal(plan.pending, 1);
+    });
+
+    it("has nothing pending once the budget covers all missing reports", () => {
+        const plan = planMeetingScan(meetings, () => false, 10);
+
+        assert.equal(plan.toLoad.length, 6);
+        assert.equal(plan.pending, 0);
+    });
+
+    it("loads nothing with a budget of zero and reports everything as pending", () => {
+        const plan = planMeetingScan(meetings, () => false, 0);
+
+        assert.equal(plan.toLoad.length, 0);
+        assert.equal(plan.pending, 6);
     });
 });

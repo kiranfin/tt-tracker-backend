@@ -1,31 +1,46 @@
-import { readThrough } from "../cache/index.js";
+import { readThrough, type ReadThroughResult } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import type { ClubScheduleResponse, MeetingLiveResponse } from "../schemas.js";
 import { isEmptyClubSchedule, ttlUnlessEmpty } from "../sources/validate.js";
+import { getStoredMeeting, storeMeeting } from "../store/meetingStore.js";
 import { getClubSchedule } from "./club.js";
 import { getMeetingLive } from "./meeting.js";
+import { getMeetingTtlMs } from "./meetingTtl.js";
 
 const CLUB_SCHEDULE_CACHE_TTL =
     (CACHE_TTL as Record<string, number>).CLUB_SCHEDULE ?? CACHE_TTL.CLUB_TEAMS;
 
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
-export function getMeetingTtlMs(result: MeetingLiveResponse) {
-    if (result.data?.live === true) {
-        return CACHE_TTL.MEETING_LIVE;
+export { getMeetingTtlMs };
+
+/**
+ * Spielbericht über Ablage und Cache. Die Meeting Route und die TTR Schätzung teilen sich den Eintrag.
+ * Ein abgeschlossener Bericht liegt dauerhaft in der Ablage und wird nie wieder bei myTischtennis
+ * angefragt.
+ */
+export async function readMeeting(meetingId: string): Promise<ReadThroughResult<MeetingLiveResponse>> {
+    const stored = getStoredMeeting(meetingId);
+
+    if (stored) {
+        return {
+            value: stored.value,
+            source: "cache",
+            origin: "upstream",
+            fetchedAt: new Date(stored.fetchedAt).toISOString()
+        };
     }
 
-    return result.data?.is_completed === true
-        ? CACHE_TTL.MEETING_COMPLETED
-        : CACHE_TTL.MEETING_PLANNED;
-}
-
-/** Spielbericht über den Cache. Die Meeting Route und die TTR Schätzung teilen sich den Eintrag. */
-export function readMeeting(meetingId: string) {
     return readThrough({
         key: `meeting-live:${meetingId}`,
         ttlMs: getMeetingTtlMs,
-        load: () => getMeetingLive({ meetingId })
+        load: async () => {
+            const response = await getMeetingLive({ meetingId });
+
+            storeMeeting(meetingId, response);
+
+            return response;
+        }
     });
 }
 

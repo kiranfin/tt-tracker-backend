@@ -63,8 +63,13 @@ export const config = {
         maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 4, 1)),
         // 150 ms (bis zu 6 bis 7 Requests pro Sekunde) hat trotz freiem Kontingent 429 ausgelöst.
         minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 300),
+        // Bremst myTischtennis mit 429, wächst das Intervall bis hierhin und schrumpft danach wieder.
+        maxIntervalMs: readNumber("MYTT_MAX_INTERVAL_MS", 3000),
         queueTimeoutMs: readNumber("MYTT_QUEUE_TIMEOUT_MS", 20 * SECOND_MS, 1),
-        maxQueueLength: 200
+        maxQueueLength: 200,
+        // Hintergrundarbeit (TTR Schätzung, Canary) darf länger warten, Nutzer gehen vor.
+        backgroundQueueTimeoutMs: readNumber("MYTT_BACKGROUND_QUEUE_TIMEOUT_MS", 60 * SECOND_MS, 1),
+        maxBackgroundQueueLength: 200
     },
 
     // 0 schaltet die Notbremse ab.
@@ -84,6 +89,15 @@ export const config = {
     canary: {
         intervalHours: readNumber("CANARY_INTERVAL_HOURS", 0),
         alertEmail: process.env.TTTRACKER_ALERT_EMAIL?.trim() || undefined
+    },
+
+    // Dauerhafte Ablage (SQLite) für abgeschlossene Spielberichte und eingefrorene Gegnerwerte.
+    store: {
+        enabled: readBoolean("STORE_ENABLED", true),
+        file:
+            process.env.STORE_FILE === ":memory:"
+                ? ":memory:"
+                : resolve(process.env.STORE_FILE ?? "data/store.db")
     },
 
     cache: {

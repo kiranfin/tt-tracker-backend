@@ -13,6 +13,7 @@ import { adminRoutes } from "./routes/adminRoutes.js";
 import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
 import { getRateLimitStatus } from "./upstream/rateLimiter.js";
 import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
+import { closeStore, getStoreDb, getStoreStatus } from "./store/db.js";
 import { getUpstreamUsage } from "./upstream/tracker.js";
 import { requestContext } from "./requestContext.js";
 import { writeJsonLog } from "./fileLogger.js";
@@ -23,6 +24,9 @@ import { attachOptionalAppUser } from "./authRequest.js";
 import { getRequestContext } from "./requestContext.js";
 
 await initCachePersistence();
+
+// Ablage beim Start öffnen (räumt dabei alte Berichte auf). Ohne Ablage läuft alles weiter.
+getStoreDb();
 
 const app = Fastify({
     logger: true,
@@ -136,6 +140,7 @@ app.get("/debug/status", async () => {
     return {
         rateLimit: getRateLimitStatus(),
         cache: getCacheStatus(),
+        store: getStoreStatus(),
         upstream: getUpstreamUsage(),
         canary: getLastCanaryReport()
     };
@@ -175,6 +180,7 @@ try {
             void app
                 .close()
                 .then(() => flushCacheToDisk())
+                .then(() => closeStore())
                 .finally(() => process.exit(0));
         });
     }
