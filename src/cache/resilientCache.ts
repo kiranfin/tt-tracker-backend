@@ -12,6 +12,21 @@ export type ResilientCacheOptions = {
     failedLoadRetryMs: number;
     now?: () => number;
     onStaleServed?: (info: { key: string; ageMs: number; error: unknown }) => void;
+    // Eine Aktualisierung im Hintergrund (stale-while-revalidate) ist fehlgeschlagen.
+    onRefreshFailed?: (info: { key: string; error: unknown }) => void;
+};
+
+export type ReadThroughParams<T> = {
+    key: string;
+    ttlMs: CacheTtl<T>;
+    load: () => Promise<T>;
+    // Wie lange der Eintrag nach dem Laden als Notnagel taugt. Standard ist die globale Obergrenze.
+    staleMaxMs?: number;
+    // true: ein abgelaufener, noch brauchbarer Eintrag wird sofort geliefert und im Hintergrund
+    // aktualisiert. Nur echte Cache Misses warten auf den Load.
+    swr?: boolean;
+    // Load für die Aktualisierung im Hintergrund, z.B. mit Hintergrund Priorität. Standard ist `load`.
+    refreshLoad?: () => Promise<T>;
 };
 
 type LoadedValue = {
@@ -37,14 +52,22 @@ export class ResilientCache {
         misses: 0,
         staleServed: 0,
         deduped: 0,
-        loadFailures: 0
+        loadFailures: 0,
+        refreshes: 0,
+        refreshFailures: 0
     };
 
     constructor(private readonly options: ResilientCacheOptions) {
         this.now = options.now ?? Date.now;
     }
 
-    set(key: string, value: unknown, ttlMs: number, origin: LoadOrigin = "upstream") {
+    set(
+        key: string,
+        value: unknown,
+        ttlMs: number,
+        origin: LoadOrigin = "upstream",
+        staleMaxMs?: number
+    ) {
         const now = this.now();
 
         // Neu einfügen, damit die Map-Reihenfolge dem Alter entspricht (älteste zuerst).
@@ -53,6 +76,7 @@ export class ResilientCache {
             value,
             fetchedAt: now,
             expiresAt: now + ttlMs,
+            usableUntil: now + Math.max(ttlMs, staleMaxMs ?? this.options.staleMaxAgeMs),
             origin
         });
 
@@ -67,11 +91,14 @@ export class ResilientCache {
         return entry && this.now() <= entry.expiresAt ? (entry.value as T) : undefined;
     }
 
-    async readThrough<T>(params: {
-        key: string;
-        ttlMs: CacheTtl<T>;
-        load: () => Promise<T>;
-    }): Promise<ReadThroughResult<T>> {
+    /** Wert, solange er noch brauchbar ist (frisch oder stale), ohne Load. */
+    peekUsable<T>(key: string): T | undefined {
+        const entry = this.entries.get(key);
+
+        return entry && this.isUsableStale(entry) ? (entry.value as T) : undefined;
+    }
+
+    async readThrough<T>(params: ReadThroughParams<T>): Promise<ReadThroughResult<T>> {
         const { key } = params;
         const now = this.now();
         const entry = this.entries.get(key);
@@ -86,6 +113,12 @@ export class ResilientCache {
         if (stale?.retryAt && now < stale.retryAt) {
             this.counters.staleServed += 1;
             return this.toResult<T>(stale.value, "stale", stale.origin, stale.fetchedAt);
+        }
+
+        if (stale && params.swr) {
+            this.refreshInBackground(params);
+
+            return this.toResult<T>(stale.value, "cache", stale.origin, stale.fetchedAt);
         }
 
         this.counters.misses += 1;
@@ -166,11 +199,30 @@ export class ResilientCache {
         this.evict();
     }
 
-    private loadShared<T>(params: {
-        key: string;
-        ttlMs: CacheTtl<T>;
-        load: () => Promise<T>;
-    }): Promise<LoadedValue> {
+    /** Startet die Aktualisierung eines abgelaufenen Eintrags, ohne dass jemand darauf wartet. */
+    private refreshInBackground<T>(params: ReadThroughParams<T>) {
+        if (this.inFlight.has(params.key)) {
+            this.counters.deduped += 1;
+            return;
+        }
+
+        this.counters.refreshes += 1;
+
+        this.loadShared({ ...params, load: params.refreshLoad ?? params.load }).catch((error) => {
+            this.counters.refreshFailures += 1;
+
+            // Die kaputte Quelle bis zum nächsten Versuch schonen, der Notnagel bleibt erhalten.
+            const entry = this.entries.get(params.key);
+
+            if (entry) {
+                entry.retryAt = this.now() + this.options.failedLoadRetryMs;
+            }
+
+            this.options.onRefreshFailed?.({ key: params.key, error });
+        });
+    }
+
+    private loadShared<T>(params: ReadThroughParams<T>): Promise<LoadedValue> {
         const running = this.inFlight.get(params.key);
 
         if (running) {
@@ -189,22 +241,18 @@ export class ResilientCache {
         return promise;
     }
 
-    private async loadAndStore<T>(params: {
-        key: string;
-        ttlMs: CacheTtl<T>;
-        load: () => Promise<T>;
-    }): Promise<LoadedValue> {
+    private async loadAndStore<T>(params: ReadThroughParams<T>): Promise<LoadedValue> {
         const { value, origin } = await runWithLoadOrigin(params.load);
         const ttlMs =
             typeof params.ttlMs === "function" ? params.ttlMs(value) : params.ttlMs;
 
-        this.set(params.key, value, ttlMs, origin);
+        this.set(params.key, value, ttlMs, origin, params.staleMaxMs);
 
         return { value, origin, fetchedAt: this.now() };
     }
 
     private isUsableStale(entry: CacheEntry) {
-        return this.now() - entry.fetchedAt <= this.options.staleMaxAgeMs;
+        return this.now() <= (entry.usableUntil ?? entry.fetchedAt + this.options.staleMaxAgeMs);
     }
 
     private evict() {

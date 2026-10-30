@@ -122,7 +122,7 @@ function checkMeetings(meetings: unknown[], source: string) {
 }
 
 // [{ "2025-10-04": [meeting, ...] }, ...] zu einer flachen Liste.
-function flattenDateGroups(groups: unknown): unknown[] {
+export function flattenDateGroups(groups: unknown): unknown[] {
     if (!Array.isArray(groups)) {
         return [];
     }

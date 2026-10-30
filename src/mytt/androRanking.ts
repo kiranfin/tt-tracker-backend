@@ -391,6 +391,9 @@ export async function getClubPlayersFromAndroRanking(params: {
     androClubNr?: string;
     clubName?: string;
     resolved?: ResolvedAndroClubNrStore;
+    // Die Kandidatensuche (bis zu 8 weitere Abrufe nacheinander) nicht selbst machen, sondern dem
+    // Aufrufer melden, der sie im Hintergrund nachholt. Bis dahin kommt die unaufgelöste Antwort.
+    deferCandidateSearch?: () => void;
 }): Promise<ClubPlayersResponse> {
     const organization = params.organization.trim().toUpperCase();
 
@@ -445,6 +448,19 @@ export async function getClubPlayersFromAndroRanking(params: {
                 resolutionSource: "direct"
             });
         }
+    }
+
+    if (params.deferCandidateSearch) {
+        params.deferCandidateSearch();
+
+        return normalizeAndroRankingResponse({
+            value: initial.raw,
+            organization,
+            clickttClubId: params.clubNumber,
+            androClubNr: initialResolution.clubNr,
+            sourcePath: initial.sourcePath,
+            resolutionSource: "unresolved"
+        });
     }
 
     const candidates = await findAndroClubNrCandidates({

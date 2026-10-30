@@ -49,7 +49,7 @@ export class UpstreamDisabledError extends Error {
 // upstream_unavailable: myTischtennis hing oder lieferte 5xx, der Breaker schont es kurz.
 // upstream_challenge: myTischtennis verlangt eine Verifizierung, bis zur nächsten Probe wird nichts gesendet.
 export type LocalRateLimitReason =
-    | "hourly_cap"
+    | "budget_exhausted"
     | "queue_full"
     | "breaker_open"
     | "upstream_unavailable"
@@ -59,7 +59,7 @@ export type LocalRateLimitReason =
 export class LocalRateLimitError extends Error {
     constructor(
         readonly retryAfterMs: number,
-        readonly reason: LocalRateLimitReason = "hourly_cap"
+        readonly reason: LocalRateLimitReason = "budget_exhausted"
     ) {
         super(
             reason === "breaker_open" ||

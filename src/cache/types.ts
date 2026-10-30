@@ -8,6 +8,9 @@ export type CacheEntry = {
     value: unknown;
     fetchedAt: number;
     expiresAt: number;
+    // Bis dahin taugt der Eintrag als Notnagel und für stale-while-revalidate. Fehlt es (ältere
+    // gesicherte Einträge), gilt fetchedAt plus die globale Obergrenze.
+    usableUntil?: number;
     origin: LoadOrigin;
     // Nach einem fehlgeschlagenen Load wird die kaputte Quelle bis dahin nicht erneut belastet.
     retryAt?: number;

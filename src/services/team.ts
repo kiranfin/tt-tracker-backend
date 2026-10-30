@@ -6,7 +6,9 @@ import {
     getTeamSchedule,
     getTeamSimpleSchedule
 } from "../mytt/team.js";
-import { readByPolicy } from "./read.js";
+import type { TeamScheduleResponse } from "../schemas.js";
+import { teamScheduleDates } from "../sources/scheduleDates.js";
+import { matchWindowFromCachedSchedule, readByPolicy } from "./read.js";
 
 export type TeamRef = {
     association: string;
@@ -55,6 +57,13 @@ export function getTeamBalanceData(team: TeamRef, filter: RoundFilter) {
     return readByPolicy({
         kind: "TEAM_BALANCES",
         key: cacheKeys.teamBalances(team, filter),
-        load: () => getTeamBalances({ ...team, filter })
+        load: () => getTeamBalances({ ...team, filter }),
+        // Bilanzen ändern sich nur nach Spielen: das Fenster kommt aus dem Mannschaftsspielplan.
+        freshContext: () => ({
+            matchWindow: matchWindowFromCachedSchedule<TeamScheduleResponse>(
+                cacheKeys.teamSchedule(team, filter),
+                teamScheduleDates
+            )
+        })
     });
 }

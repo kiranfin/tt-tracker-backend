@@ -1,8 +1,8 @@
 import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { loadCacheFromFile, saveCacheToFile } from "./persistence.js";
-import { ResilientCache } from "./resilientCache.js";
-import type { CacheTtl, ReadThroughResult } from "./types.js";
+import { ResilientCache, type ReadThroughParams } from "./resilientCache.js";
+import type { ReadThroughResult } from "./types.js";
 
 export { markLoadOrigin } from "./loadOrigin.js";
 export type { CacheSource, ReadThroughResult } from "./types.js";
@@ -11,6 +11,13 @@ const { persist, ...cacheOptions } = config.cache;
 
 const cache = new ResilientCache({
     ...cacheOptions,
+    onRefreshFailed: ({ key, error }) => {
+        void writeJsonLog("cache_refresh_failed", {
+            key,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: error instanceof Error ? error.message : "Unknown error"
+        });
+    },
     onStaleServed: ({ key, ageMs, error }) => {
         void writeJsonLog("cache_stale_served", {
             key,
@@ -21,11 +28,7 @@ const cache = new ResilientCache({
     }
 });
 
-export function readThrough<T>(params: {
-    key: string;
-    ttlMs: CacheTtl<T>;
-    load: () => Promise<T>;
-}): Promise<ReadThroughResult<T>> {
+export function readThrough<T>(params: ReadThroughParams<T>): Promise<ReadThroughResult<T>> {
     return cache.readThrough(params);
 }
 
@@ -34,9 +37,14 @@ export function peekCached<T>(key: string): T | undefined {
     return cache.peek<T>(key);
 }
 
+/** Wert, solange er noch brauchbar ist (frisch oder abgelaufen), ohne zu laden. */
+export function peekUsableCached<T>(key: string): T | undefined {
+    return cache.peekUsable<T>(key);
+}
+
 /** Legt einen Wert direkt ab (Merkzettel, die als Nebenprodukt eines Loads entstehen). */
-export function putCached(key: string, value: unknown, ttlMs: number) {
-    cache.set(key, value, ttlMs);
+export function putCached(key: string, value: unknown, ttlMs: number, staleMaxMs?: number) {
+    cache.set(key, value, ttlMs, "upstream", staleMaxMs);
 }
 
 export function getCachedValues(): unknown[] {

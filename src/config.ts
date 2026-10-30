@@ -65,9 +65,10 @@ export const config = {
     },
 
     throttle: {
-        maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 4, 1)),
+        maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 2, 1)),
         // 150 ms (bis zu 6 bis 7 Requests pro Sekunde) hat trotz freiem Kontingent 429 ausgelöst.
-        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 300),
+        // Gleichmäßig und langsam wirkt weniger verdächtig als kurze Bursts.
+        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 1000),
         // Bremst myTischtennis mit 429, wächst das Intervall bis hierhin und schrumpft danach wieder.
         maxIntervalMs: readNumber("MYTT_MAX_INTERVAL_MS", 3000),
         queueTimeoutMs: readNumber("MYTT_QUEUE_TIMEOUT_MS", 20 * SECOND_MS, 1),
@@ -77,8 +78,13 @@ export const config = {
         maxBackgroundQueueLength: 200
     },
 
-    // 0 schaltet die Notbremse ab.
-    maxRequestsPerHour: readNumber("MYTT_MAX_REQUESTS_PER_HOUR", 1000),
+    // Eigenes Budget im rollenden 30 Minuten Fenster (myTischtennis erlaubt 360, wir nutzen höchstens ein
+    // Viertel). Hintergrundarbeit (Aktualisierungen, Logos, Canary) darf nur einen Anteil davon nutzen,
+    // der Rest bleibt für Cache Misses, auf die ein Nutzer wartet. 0 schaltet das Budget ab.
+    budget: {
+        per30Min: Math.floor(readNumber("MYTT_BUDGET_PER_30MIN", 90)),
+        backgroundShare: Math.min(1, readNumber("MYTT_BACKGROUND_SHARE", 0.6))
+    },
 
     // myTischtennis meldet sein Kontingent im `ratelimit` Header (aktuell 360 pro 30 Minuten).
     // Bleiben nur noch so viele übrig, pausieren wir bis zum Reset, statt in einen 429 zu laufen.

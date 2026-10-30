@@ -1,15 +1,17 @@
 import { cacheKeys } from "../cacheKeys.js";
-import { peekCached, putCached } from "../cache/index.js";
+import { peekCached, peekUsableCached, putCached } from "../cache/index.js";
 import { getClubPlayersFromAndroRanking, type ResolvedAndroClubNrStore } from "../mytt/androRanking.js";
 import {
     getClubHead,
     getClubInfo,
     getClubSchedule,
-    getClubTeams
+    getClubTeams,
+    type ClubHead
 } from "../mytt/club.js";
-import { getFreshMs } from "../policies.js";
+import { DATA_POLICIES, getFreshMs } from "../policies.js";
 import type { ClubPlayersResponse, ClubScheduleResponse } from "../schemas.js";
 import { getCurrentSeasonSegment } from "../utils/season.js";
+import { scheduleBackground } from "./jobs.js";
 import { readByPolicy, type ServiceResult } from "./read.js";
 
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
@@ -35,31 +37,38 @@ function readClubHead(organization: string, clubNumber: string, season = getCurr
     });
 }
 
+export type ClubLogoResult = {
+    // { "TTBW:2055064": url | null }, null heißt: Verein hat kein Logo.
+    logos: Record<string, string | null>;
+    // Vereine, deren Logo noch fehlt. Sie werden im Hintergrund geladen, die App fragt später erneut.
+    pending: string[];
+};
+
 /**
- * Logos für mehrere Vereine: { "TTBW:2055064": url | null }. Fehlt ein Verein in der Antwort, ist der
- * Abruf gescheitert und die App darf es später erneut versuchen. null heißt: Verein hat kein Logo.
+ * Logos für mehrere Vereine. Liefert nur, was schon im Cache liegt, und plant fehlende (oder
+ * abgelaufene) Logos als Hintergrundjobs ein. Eine Antwort löst nie mehr als null Abrufe aus.
  */
-export async function getClubLogos(
-    refs: string[],
-    onError?: (error: unknown, ref: string) => void
-): Promise<Record<string, string | null>> {
-    const results = await Promise.all(
-        refs.map(async (ref) => {
-            const [organization, clubNumber] = ref.split(":");
+export function getClubLogos(refs: string[]): ClubLogoResult {
+    const logos: Record<string, string | null> = {};
+    const pending: string[] = [];
 
-            try {
-                const head = await readClubHead(organization!, clubNumber!);
+    for (const ref of refs) {
+        const [organization, clubNumber] = ref.split(":") as [string, string];
+        const key = cacheKeys.clubHead(organization, clubNumber);
+        const usable = peekUsableCached<ClubHead>(key);
 
-                return [ref, head.value.logoUrl] as const;
-            } catch (error) {
-                onError?.(error, ref);
+        if (usable) {
+            logos[ref] = usable.logoUrl;
+        } else {
+            pending.push(ref);
+        }
 
-                return null;
-            }
-        })
-    );
+        if (peekCached<ClubHead>(key) === undefined) {
+            scheduleBackground(`club-head:${ref}`, () => readClubHead(organization, clubNumber));
+        }
+    }
 
-    return Object.fromEntries(results.filter((entry) => entry !== null));
+    return { logos, pending };
 }
 
 export function getClubInfoData(params: {
@@ -89,6 +98,28 @@ export function getClubTeamList(params: { organization: string; clubNumber: stri
 }
 
 /**
+ * Sucht im Hintergrund die Andro Vereinsnummer und legt bei Erfolg die vollständige Liste unter
+ * dem Key ab, unter dem die unaufgelöste (leere) Liste zuletzt geliefert wurde.
+ */
+function scheduleCandidateSearch(
+    key: string,
+    params: { organization: string; clubNumber: string; androClubNr?: string; clubName?: string }
+) {
+    scheduleBackground(`andro-candidates:${key}`, async () => {
+        const list = await getClubPlayersFromAndroRanking({ ...params, resolved: androClubNrStore });
+
+        if (list.data.length > 0) {
+            putCached(
+                key,
+                list,
+                getFreshMs("CLUB_PLAYERS", list),
+                DATA_POLICIES.CLUB_PLAYERS.staleMax
+            );
+        }
+    });
+}
+
+/**
  * Vereinsliste aus der Andro Rangliste über den Cache. Eine Stelle für den Cache Key, damit die
  * Vereinsroute und die Rating Suche denselben Eintrag nutzen (der Vereinsname gehört nicht in den Key).
  */
@@ -104,7 +135,13 @@ export async function getClubPlayerList(params: {
         readByPolicy({
             kind: "CLUB_PLAYERS",
             key,
-            load: () => getClubPlayersFromAndroRanking({ ...params, resolved: androClubNrStore })
+            load: () =>
+                getClubPlayersFromAndroRanking({
+                    ...params,
+                    resolved: androClubNrStore,
+                    // Die Kandidatensuche kostet bis zu 8 Abrufe: nie, während ein Nutzer wartet.
+                    deferCandidateSearch: () => scheduleCandidateSearch(key, params)
+                })
         });
 
     const result = await read(baseKey);

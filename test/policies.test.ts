@@ -11,6 +11,7 @@ import {
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 describe("data policies", () => {
     it("gives every kind a usable policy", () => {
@@ -21,16 +22,16 @@ describe("data policies", () => {
         }
     });
 
-    it("keeps the TTLs the routes used before the refactoring", () => {
+    it("holds the agreed freshness per kind", () => {
         const fixed: Array<[DataKind, number]> = [
-            ["PLAYER_SEARCH", 5 * MINUTE],
-            ["CLUB_SEARCH", 15 * MINUTE],
+            ["PLAYER_SEARCH", DAY],
+            ["CLUB_SEARCH", DAY],
             ["PLAYER_TTR", 30 * MINUTE],
             ["PLAYER_TTR_HISTORY", HOUR],
             ["CLUB_TEAMS", HOUR],
             ["CLUB_INFO", 12 * HOUR],
-            ["CLUB_HEAD", 7 * 24 * HOUR],
-            ["ANDRO_CLUB_NR", 24 * HOUR],
+            ["CLUB_HEAD", 30 * DAY],
+            ["ANDRO_CLUB_NR", 30 * DAY],
             ["TEAM_PLAYERS", 10 * MINUTE],
             ["TEAM_SIMPLE_SCHEDULE", 5 * MINUTE],
             ["TEAM_INFOS", 15 * MINUTE],
@@ -49,9 +50,9 @@ describe("data policies", () => {
         assert.equal(getFreshMs("CLUB_PLAYERS", { data: [] }), EMPTY_RESULT_FRESH_MS);
         assert.equal(getFreshMs("CLUB_PLAYERS", { data: [{}] }), HOUR);
         assert.equal(getFreshMs("LEAGUE_REGIONS", { regions: [] }), EMPTY_RESULT_FRESH_MS);
-        assert.equal(getFreshMs("LEAGUE_REGIONS", { regions: [1] }), 6 * HOUR);
+        assert.equal(getFreshMs("LEAGUE_REGIONS", { regions: [1] }), 7 * DAY);
         assert.equal(getFreshMs("LEAGUE_CLASSES", { classes: [] }), EMPTY_RESULT_FRESH_MS);
-        assert.equal(getFreshMs("LEAGUE_CLASSES", { classes: [1] }), HOUR);
+        assert.equal(getFreshMs("LEAGUE_CLASSES", { classes: [1] }), 7 * DAY);
         assert.equal(getFreshMs("PLAYER_CLUB", null), EMPTY_RESULT_FRESH_MS);
         assert.equal(getFreshMs("PLAYER_CLUB", { clubNumber: "1" }), 12 * HOUR);
     });
@@ -65,9 +66,163 @@ describe("data policies", () => {
     });
 
     it("tells live, planned and completed meetings apart", () => {
-        assert.equal(getFreshMs("MEETING", { data: { live: true } }), 30_000);
-        assert.equal(getFreshMs("MEETING", { data: { live: false } }), 2 * MINUTE);
-        assert.equal(getFreshMs("MEETING", { data: { is_completed: true } }), MEETING_COMPLETED_FRESH_MS);
+        const now = Date.parse("2026-10-30T12:00:00Z");
+
+        assert.equal(getFreshMs("MEETING", { data: { live: true } }, { now }), MINUTE);
+        assert.equal(getFreshMs("MEETING", { data: { live: false } }, { now }), 2 * MINUTE);
+        assert.equal(
+            getFreshMs("MEETING", { data: { is_completed: true } }, { now }),
+            MEETING_COMPLETED_FRESH_MS
+        );
+    });
+
+    it("keeps a planned meeting fresh until it starts, at most a day", () => {
+        const now = Date.parse("2026-10-30T12:00:00Z");
+
+        assert.equal(
+            getFreshMs("MEETING", { data: { scheduled: "2026-10-30T16:00:00Z" } }, { now }),
+            4 * HOUR
+        );
+        assert.equal(
+            getFreshMs("MEETING", { data: { scheduled: "2026-11-20T16:00:00Z" } }, { now }),
+            DAY
+        );
+        assert.equal(
+            getFreshMs("MEETING", { data: { scheduled: "2026-10-30T12:00:30Z" } }, { now }),
+            2 * MINUTE
+        );
+    });
+});
+
+describe("freshness by schedule", () => {
+    const now = Date.parse("2026-10-30T12:00:00Z");
+
+    function leagueSchedule(...dates: string[]) {
+        return {
+            data: {
+                meetings: [
+                    { day: dates.map((date) => ({ date, team_home: "A", team_away: "B" })) }
+                ]
+            }
+        };
+    }
+
+    it("keeps a league schedule fresh until the next match is over (start plus 3 hours)", () => {
+        // Beginn in 3 Stunden, Ende in 6 Stunden.
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", leagueSchedule("2026-10-30T15:00:00Z"), { now }),
+            6 * HOUR
+        );
+        // Ende in mehr als 24 Stunden: gedeckelt.
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", leagueSchedule("2026-11-05T10:00:00Z"), { now }),
+            DAY
+        );
+    });
+
+    it("uses the earliest upcoming match and ignores finished ones", () => {
+        const value = leagueSchedule(
+            "2026-10-01T10:00:00Z",
+            "2026-10-30T20:00:00Z",
+            "2026-11-05T10:00:00Z"
+        );
+
+        // Ende des Termins um 23:00, in 11 Stunden.
+        assert.equal(getFreshMs("LEAGUE_SCHEDULE", value, { now }), 11 * HOUR);
+    });
+
+    it("checks every 10 minutes while a match is running", () => {
+        const value = leagueSchedule("2026-10-30T11:00:00Z", "2026-11-05T10:00:00Z");
+
+        assert.equal(getFreshMs("LEAGUE_SCHEDULE", value, { now }), 10 * MINUTE);
+    });
+
+    it("keeps the live check until the match is over", () => {
+        const value = leagueSchedule("2026-10-30T15:00:00Z");
+
+        // Kurz vor Ende des Termins.
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", value, { now: Date.parse("2026-10-30T17:59:00Z") }),
+            10 * MINUTE,
+            "a running match counts as live window"
+        );
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", leagueSchedule("2026-10-30T12:03:00Z", "2026-10-30T12:01:00Z"), {
+                now: Date.parse("2026-10-30T12:00:00Z")
+            }),
+            // Beginn in einer Minute: Ende in 3 Stunden 1 Minute.
+            3 * HOUR + MINUTE
+        );
+    });
+
+    it("holds the maximum when no match is left", () => {
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", leagueSchedule("2026-05-01T10:00:00Z"), { now }),
+            DAY
+        );
+    });
+
+    it("limits the club schedule to 12 hours", () => {
+        const value = {
+            data: { meetings: [{ date: "2026-11-20T10:00:00Z", team_home: "A", team_away: "B" }] }
+        };
+
+        assert.equal(getFreshMs("CLUB_SCHEDULE", value, { now }), 12 * HOUR);
+    });
+
+    it("treats a date without time as lasting until the end of that day", () => {
+        // Das Ende liegt am 31.10. um 00:00 UTC, in 12 Stunden. Beginn war scheinbar 21:00, also nicht laufend.
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", leagueSchedule("2026-10-30"), { now }),
+            12 * HOUR
+        );
+    });
+
+    it("lets table and balances follow the schedule window, and fall back without one", () => {
+        const table = { data: [{ rank: 1 }] };
+
+        assert.equal(getFreshMs("LEAGUE_TABLE", table, { now }), 15 * MINUTE);
+        assert.equal(getFreshMs("LEAGUE_TABLE", table, { now, matchWindow: null }), 15 * MINUTE);
+        assert.equal(
+            getFreshMs("LEAGUE_TABLE", table, {
+                now,
+                matchWindow: { activeNow: false, nextEnd: now + 8 * HOUR }
+            }),
+            8 * HOUR
+        );
+        assert.equal(
+            getFreshMs("LEAGUE_TABLE", table, {
+                now,
+                matchWindow: { activeNow: true, nextEnd: now + HOUR }
+            }),
+            10 * MINUTE
+        );
+        assert.equal(
+            getFreshMs("LEAGUE_TABLE", table, {
+                now,
+                matchWindow: { activeNow: false, nextEnd: null }
+            }),
+            DAY
+        );
+    });
+
+    it("still shortens an empty schedule", () => {
+        assert.equal(
+            getFreshMs("LEAGUE_SCHEDULE", { data: { meetings: [] } }, { now }),
+            EMPTY_RESULT_FRESH_MS
+        );
+    });
+});
+
+describe("stale limits", () => {
+    it("keeps long lived entries usable for at least twice their freshness", () => {
+        assert.ok(DATA_POLICIES.CLUB_HEAD.staleMax >= 60 * DAY);
+        assert.ok(DATA_POLICIES.ANDRO_CLUB_NR.staleMax >= 60 * DAY);
+    });
+
+    it("serves live data fresh instead of stale-while-revalidate", () => {
+        assert.equal(DATA_POLICIES.MEETING.swr, false);
+        assert.equal(DATA_POLICIES.LEAGUE_TABLE.swr, true);
     });
 });
 

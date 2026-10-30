@@ -50,7 +50,9 @@ const challengeBreaker = new CircuitBreaker({
     }
 });
 
-const requestWindow = new RequestWindow(config.maxRequestsPerHour);
+const requestWindow = new RequestWindow(config.budget.per30Min, {
+    backgroundShare: config.budget.backgroundShare
+});
 
 const throttle = new Throttle(config.throttle);
 
@@ -151,7 +153,7 @@ export async function acquireUpstreamSlot(options: {
             return () => {};
         }
 
-        requestWindow.assertAvailable();
+        requestWindow.assertAvailable(options.priority);
 
         const release = await throttle.acquire(options.priority);
 
@@ -164,7 +166,7 @@ export async function acquireUpstreamSlot(options: {
             throw error;
         }
 
-        requestWindow.record();
+        requestWindow.record(options.priority);
 
         return release;
     } catch (error) {
@@ -264,6 +266,22 @@ export function resetBreakersForTests() {
     for (const breaker of Object.values(breakers)) {
         breaker.reset();
     }
+}
+
+/**
+ * Darf Hintergrundarbeit jetzt noch `requests` Upstream Requests anstoßen? Nein, wenn eine Challenge
+ * läuft, ein Breaker offen ist oder das Budget für Hintergrund nicht mehr reicht.
+ */
+export function canRunBackgroundWork(requests = 1) {
+    if (challengeBreaker.challengeStatus().active) {
+        return false;
+    }
+
+    if (Object.values(breakers).some((breaker) => breaker.remainingMs() > 0)) {
+        return false;
+    }
+
+    return requestWindow.remainingForBackground() >= requests;
 }
 
 export function getChallengeStatus() {

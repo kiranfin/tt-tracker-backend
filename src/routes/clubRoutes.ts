@@ -19,8 +19,9 @@ type ClubParams = {
 
 export async function clubRoutes(app: FastifyInstance) {
     // Logos für mehrere Vereine auf einmal (Suche, Favoriten, Tabellen): ?clubs=TTBW:2055064,WTTV:12201
-    // Antwort { "TTBW:2055064": url | null }. Fehlt ein Verein in der Antwort, ist der Abruf gescheitert
-    // und die App darf es später erneut versuchen. null heißt: Verein hat kein Logo (oder ist unter dem Verband unbekannt).
+    // Antwort { "TTBW:2055064": url | null }. Fehlt ein Verein in der Antwort (auch in meta.pending), wird sein
+    // Logo im Hintergrund geladen und die App darf es später erneut versuchen. null heißt: Verein hat kein Logo
+    // (oder ist unter dem Verband unbekannt).
     app.get("/api/clubs/logos", async (request, reply) => {
         const query = request.query as { clubs?: string };
 
@@ -44,11 +45,10 @@ export async function clubRoutes(app: FastifyInstance) {
             );
         }
 
-        const logos = await getClubLogos(refs, (error, ref) =>
-            request.log.warn({ err: error, ref }, "Vereinslogo nicht geladen")
-        );
+        // Nur was im Cache liegt. Fehlende Logos lädt das Backend im Hintergrund nach.
+        const { logos, pending } = getClubLogos(refs);
 
-        return { data: logos };
+        return { data: logos, meta: { pending } };
     });
 
     app.get("/api/clubs/:organization/:clubNumber/info", async (request, reply) => {

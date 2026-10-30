@@ -7,7 +7,9 @@ import {
     resolveAssociation
 } from "../mytt/leagueDiscovery.js";
 import { getLeagueSchedule, getLeagueTable } from "../mytt/league.js";
-import { readByPolicy } from "./read.js";
+import type { LeagueScheduleResponse } from "../schemas.js";
+import { leagueScheduleDates } from "../sources/scheduleDates.js";
+import { matchWindowFromCachedSchedule, readByPolicy } from "./read.js";
 
 export { ASSOCIATIONS, normalizeSeason, resolveAssociation };
 
@@ -55,6 +57,16 @@ export function getLeagueClasses(params: {
     });
 }
 
+function leagueScheduleKey(params: LeagueRef) {
+    return cacheKeys.leagueSchedule(
+        params.association,
+        params.season,
+        params.groupId,
+        params.leagueSlug,
+        params.filter
+    );
+}
+
 export function getLeagueTableData(params: LeagueRef) {
     return readByPolicy({
         kind: "LEAGUE_TABLE",
@@ -65,20 +77,21 @@ export function getLeagueTableData(params: LeagueRef) {
             params.leagueSlug,
             params.filter
         ),
-        load: () => getLeagueTable(params)
+        load: () => getLeagueTable(params),
+        // Die Tabelle ändert sich nur nach Spieltagen: das Fenster kommt aus dem Liga Spielplan.
+        freshContext: () => ({
+            matchWindow: matchWindowFromCachedSchedule<LeagueScheduleResponse>(
+                leagueScheduleKey(params),
+                leagueScheduleDates
+            )
+        })
     });
 }
 
 export function getLeagueScheduleData(params: LeagueRef) {
     return readByPolicy({
         kind: "LEAGUE_SCHEDULE",
-        key: cacheKeys.leagueSchedule(
-            params.association,
-            params.season,
-            params.groupId,
-            params.leagueSlug,
-            params.filter
-        ),
+        key: leagueScheduleKey(params),
         load: () => getLeagueSchedule(params)
     });
 }
