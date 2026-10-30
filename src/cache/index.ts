@@ -47,6 +47,16 @@ export function putCached(key: string, value: unknown, ttlMs: number, staleMaxMs
     cache.set(key, value, ttlMs, "upstream", staleMaxMs);
 }
 
+/** Alter und Ablauf aller Einträge, ohne die Werte (für /debug/status). */
+export function getCacheEntries() {
+    return cache.snapshot().map(([key, entry]) => ({
+        key,
+        fetchedAt: entry.fetchedAt,
+        expiresAt: entry.expiresAt,
+        usableUntil: entry.usableUntil
+    }));
+}
+
 export function getCachedValues(): unknown[] {
     return cache.usableValues();
 }

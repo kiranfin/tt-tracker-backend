@@ -8,6 +8,9 @@ type UpstreamRequestEntry = {
     durationMs: number;
     errorName?: string;
     errorMessage?: string;
+    // Datenart (policies.ts), die den Request ausgelöst hat, und ihre Priorität.
+    kind?: string;
+    priority?: "interactive" | "background";
 };
 
 const upstreamRequests: UpstreamRequestEntry[] = [];
@@ -89,12 +92,21 @@ export function getUpstreamUsage() {
     const byPath: Record<string, number> = {};
     const byStatus: Record<string, number> = {};
     const byMethod: Record<string, number> = {};
+    // Das Budget gilt für 30 Minuten: wofür wurde es in dieser Zeit verbraucht?
+    const byKindLast30Min: Record<string, { interactive: number; background: number }> = {};
+    const budgetCutoff = now - 30 * 60 * 1000;
 
     for (const request of upstreamRequests) {
         byPath[request.path] = (byPath[request.path] ?? 0) + 1;
         byStatus[String(request.status ?? "ERROR")] =
             (byStatus[String(request.status ?? "ERROR")] ?? 0) + 1;
         byMethod[request.method] = (byMethod[request.method] ?? 0) + 1;
+
+        if (request.timestamp >= budgetCutoff) {
+            const entry = (byKindLast30Min[request.kind ?? "other"] ??= { interactive: 0, background: 0 });
+
+            entry[request.priority ?? "interactive"] += 1;
+        }
     }
 
     return {
@@ -102,6 +114,7 @@ export function getUpstreamUsage() {
         byPath,
         byStatus,
         byMethod,
+        byKindLast30Min,
         sources: Object.fromEntries(sourceStats),
         recent: upstreamRequests.slice(-30).reverse().map((request) => ({
             ...request,

@@ -112,3 +112,40 @@ export const cacheKeys = {
     eventsList: () => "events:list",
     eventsDetail: (id: string) => `events:detail:${id.toLowerCase()}`
 };
+
+// Erstes Segment eines Keys zur Datenart (policies.ts). Gegenstück zu den Builder Funktionen oben.
+const KIND_BY_PREFIX: Record<string, string> = {
+    players: "PLAYER_SEARCH",
+    clubs: "CLUB_SEARCH",
+    "player-ttr": "PLAYER_TTR",
+    "player-ttr-history": "PLAYER_TTR_HISTORY",
+    "player-ttr-estimate": "PLAYER_TTR_ESTIMATE",
+    "player-club": "PLAYER_CLUB",
+    "club-head": "CLUB_HEAD",
+    "club-info": "CLUB_INFO",
+    "club-teams": "CLUB_TEAMS",
+    "club-players-andro": "CLUB_PLAYERS",
+    "club-schedule": "CLUB_SCHEDULE",
+    "andro-club-nr": "ANDRO_CLUB_NR",
+    "league-regions": "LEAGUE_REGIONS",
+    "league-classes": "LEAGUE_CLASSES",
+    "league-table": "LEAGUE_TABLE",
+    "league-schedule": "LEAGUE_SCHEDULE",
+    "team-players": "TEAM_PLAYERS",
+    "team-simple-schedule": "TEAM_SIMPLE_SCHEDULE",
+    "team-infos": "TEAM_INFOS",
+    "team-schedule": "TEAM_SCHEDULE",
+    "team-balances": "TEAM_BALANCES",
+    "meeting-live": "MEETING"
+};
+
+/** Datenart eines Cache Keys, null für unbekannte Keys. */
+export function kindOfKey(key: string): string | null {
+    const [prefix, second] = key.split(":");
+
+    if (prefix === "events") {
+        return second === "list" ? "EVENTS_LIST" : second === "detail" ? "EVENTS_DETAIL" : null;
+    }
+
+    return KIND_BY_PREFIX[prefix!] ?? null;
+}

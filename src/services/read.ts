@@ -1,6 +1,7 @@
 import { peekUsableCached, readThrough, type ReadThroughResult } from "../cache/index.js";
 import { DATA_POLICIES, getFreshMs, type DataKind, type FreshContext } from "../policies.js";
 import { getMatchWindow, type MatchWindow } from "../sources/scheduleDates.js";
+import { runWithDataKind } from "../upstream/dataKind.js";
 import { runInBackground } from "../upstream/priority.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
@@ -34,7 +35,7 @@ export async function readByPolicy<T>(params: {
     freshContext?: () => FreshContext;
 }): Promise<ServiceResult<T>> {
     const policy = DATA_POLICIES[params.kind];
-    const { load } = params;
+    const load = () => runWithDataKind(params.kind, params.load);
 
     const result = await readThrough({
         key: params.key,

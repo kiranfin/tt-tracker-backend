@@ -103,4 +103,5 @@ Everything that reaches myTT goes through `upstream/fetch.ts`:
 - a redirect to `/verify` (captcha) is a challenge, not a rate limit: both lanes pause for 6 hours, then
   exactly one probe request goes out, every new challenge doubles the pause up to 24 hours
 - the canary runs at most daily and is skipped during a challenge, with an open breaker or a tight budget
-- `/debug/status` shows breaker state, queue, budget, cache, store, background jobs and the challenge state
+- `/debug/status` shows breaker state, queue, budget, cache, store, background jobs and the challenge state. Under `data` it breaks the cache and the budget down per data kind: entries, fresh and stale count, age, the next refresh and how many upstream requests the kind caused in the last 30 minutes (interactive and background). `services/read.ts` tags every load with its kind (`upstream/dataKind.ts`) for that
+- the request log (`logs/requests.jsonl`) rotates at 20 MB, three old files are kept

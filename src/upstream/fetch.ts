@@ -6,6 +6,7 @@ import {
     UpstreamDisabledError,
     UpstreamError
 } from "./errors.js";
+import { getDataKind } from "./dataKind.js";
 import { getUpstreamPriority } from "./priority.js";
 import {
     acquireUpstreamSlot,
@@ -205,6 +206,7 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
     const logBase = {
         requestId: context?.requestId,
         priority,
+        dataKind: getDataKind(),
         clientIp: context?.ip,
         backendMethod: context?.method,
         backendUrl: context?.url,
@@ -265,7 +267,9 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
             url,
             status: response?.status,
             ok: response?.ok ?? false,
-            durationMs
+            durationMs,
+            kind: getDataKind(),
+            priority
         });
 
         if (outcome.challengeLocation) {

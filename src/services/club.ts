@@ -10,6 +10,7 @@ import {
 } from "../mytt/club.js";
 import { DATA_POLICIES, getFreshMs } from "../policies.js";
 import type { ClubPlayersResponse, ClubScheduleResponse } from "../schemas.js";
+import { runWithDataKind } from "../upstream/dataKind.js";
 import { getCurrentSeasonSegment } from "../utils/season.js";
 import { scheduleBackground } from "./jobs.js";
 import { readByPolicy, type ServiceResult } from "./read.js";
@@ -106,7 +107,9 @@ function scheduleCandidateSearch(
     params: { organization: string; clubNumber: string; androClubNr?: string; clubName?: string }
 ) {
     scheduleBackground(`andro-candidates:${key}`, async () => {
-        const list = await getClubPlayersFromAndroRanking({ ...params, resolved: androClubNrStore });
+        const list = await runWithDataKind("CLUB_PLAYERS", () =>
+            getClubPlayersFromAndroRanking({ ...params, resolved: androClubNrStore })
+        );
 
         if (list.data.length > 0) {
             putCached(
