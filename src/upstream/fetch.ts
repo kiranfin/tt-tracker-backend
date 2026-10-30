@@ -118,6 +118,8 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         });
 
         const durationMs = Date.now() - startedAt;
+        const retryAfterHeader = response.headers.get("retry-after");
+        const rateLimitHeader = response.headers.get("ratelimit");
 
         void writeJsonLog("mytt_upstream_request", {
             ...logBase,
@@ -125,6 +127,10 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
             ok: response.ok,
             durationMs,
             localRateLimitCounted: counted,
+            // Nur bei 429: zeigt, welches Limit von myTischtennis gegriffen hat.
+            ...(response.status === 429
+                ? { retryAfter: retryAfterHeader, rateLimit: rateLimitHeader }
+                : {}),
             ...request.logExtra
         });
 
@@ -140,8 +146,8 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         reportUpstreamResult({
             lane,
             status: response.status,
-            retryAfterHeader: response.headers.get("retry-after"),
-            rateLimitHeader: response.headers.get("ratelimit")
+            retryAfterHeader,
+            rateLimitHeader
         });
 
         const bodyText =

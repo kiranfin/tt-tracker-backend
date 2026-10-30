@@ -61,7 +61,8 @@ export const config = {
 
     throttle: {
         maxConcurrent: Math.floor(readNumber("MYTT_MAX_CONCURRENT", 4, 1)),
-        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 150),
+        // 150 ms (bis zu 6 bis 7 Requests pro Sekunde) hat trotz freiem Kontingent 429 ausgelöst.
+        minIntervalMs: readNumber("MYTT_MIN_INTERVAL_MS", 300),
         queueTimeoutMs: readNumber("MYTT_QUEUE_TIMEOUT_MS", 20 * SECOND_MS, 1),
         maxQueueLength: 200
     },

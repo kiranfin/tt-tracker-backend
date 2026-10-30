@@ -128,6 +128,9 @@ export function reportUpstreamResult(
             breaker.report(result);
         }
 
+        // Für den Status trotzdem merken, wie das Kontingent beim 429 stand.
+        lastQuota = parseRateLimitHeader(result.rateLimitHeader) ?? lastQuota;
+
         return;
     }
 
