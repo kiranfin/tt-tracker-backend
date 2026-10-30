@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { config } from "../config.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 // Berichte, die länger als zwei Saisons zurückliegen, braucht keine Schätzung mehr.
 const MEETING_MAX_AGE_MS = 2 * 365 * 24 * 60 * 60 * 1000;
@@ -35,6 +35,27 @@ function migrate(database: DatabaseSync) {
             rated_at INTEGER NOT NULL,
             PRIMARY KEY (meeting_id, person_id)
         );
+        CREATE TABLE IF NOT EXISTS mytt_grants (
+            id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL,
+            grantee_user_id TEXT NOT NULL,
+            scopes TEXT NOT NULL,
+            expires_at TEXT,
+            created_at TEXT NOT NULL,
+            revoked_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_mytt_grants_owner ON mytt_grants (owner_user_id);
+        CREATE INDEX IF NOT EXISTS idx_mytt_grants_grantee ON mytt_grants (grantee_user_id);
+        CREATE TABLE IF NOT EXISTS mytt_snapshots (
+            user_id TEXT PRIMARY KEY,
+            nuid TEXT NOT NULL,
+            ttr TEXT,
+            ttr_fetched_at INTEGER,
+            history TEXT,
+            history_fetched_at INTEGER,
+            last_upload_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mytt_snapshots_nuid ON mytt_snapshots (nuid);
     `);
 
     database.exec("DELETE FROM schema_version");

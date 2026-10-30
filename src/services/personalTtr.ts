@@ -12,6 +12,7 @@ import {
     hasAuthError
 } from "./compare.js";
 import { readByPolicy, type ResponseMeta, type ServiceResult } from "./read.js";
+import { toTtrData, toTtrHistoryData } from "./ttrShape.js";
 
 // Persönliche TTR Daten über die myTT Session eines Users. Dieser Weg fällt mit der Umstellung auf
 // Snapshots vom Gerät weg (Phase 4), bis dahin läuft er unverändert über den Server.
@@ -93,40 +94,14 @@ function readPlayerTtrHistory(requestingUserId: string, nuid: string) {
 
 export async function getPersonalTtr(requestingUserId: string, nuid: string) {
     const cached = await readPlayerTtr(requestingUserId, nuid);
-    const result = cached.value;
 
-    return {
-        value: {
-            nuid,
-            available: !hasAuthError(result) && result.ttr != null,
-            ttr: result.ttr ?? null,
-            error: result.error ?? null
-        },
-        meta: cached.meta
-    };
+    return { value: toTtrData(nuid, cached.value), meta: cached.meta };
 }
 
 export async function getPersonalTtrHistory(requestingUserId: string, nuid: string) {
     const cached = await readPlayerTtrHistory(requestingUserId, nuid);
-    const result = cached.value;
 
-    return {
-        value: {
-            nuid,
-            available: !hasAuthError(result),
-            ttr: result.ttr ?? null,
-            qttr: result.vq_ttr ?? Number(result.ttr_last_fixed) ?? null,
-            qttrDate: result.ttr_last_fixed_date ?? null,
-            maxTtr: result.max_ttr ?? null,
-            ttrDate: result.ttr_date ?? null,
-            maxTtrDate: result.max_ttr_date ?? null,
-            clubName: result.club_name ?? null,
-            personName: result.person_name ?? null,
-            events: result.event ?? [],
-            error: result.error ?? null
-        },
-        meta: cached.meta
-    };
+    return { value: toTtrHistoryData(nuid, cached.value), meta: cached.meta };
 }
 
 export async function getHeadToHead(requestingUserId: string, nuid: string, otherUser: string) {

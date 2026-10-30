@@ -64,6 +64,24 @@ priority): missing club logos (`/api/clubs/logos` only answers from the cache an
 `meta.pending`) and the search for the Andro club number. Nothing is planned during a challenge or
 when the background budget is used up.
 
+## Personal data and sharing
+
+Data that needs a myTT login is fetched by the phone only, with the cookie on the device. The server holds
+no cookie for the new app versions. When a user shares their rating with another app user (a grant), the
+phone uploads the last data it got from myTT as a snapshot:
+
+- `PUT /api/me/mytt/snapshots` takes the raw myTT history (checked against `PlayerTtrHistoryResponseSchema`),
+  at most once an hour per user (a new grant lifts the limit once), only while a live grant exists, size
+  limited. The first upload binds the user to that player id, another id needs `replacePlayer`.
+- `GET /api/shared/players/:nuid` returns the snapshot to a receiver whose grant allows it:
+  `ttr:read` gives the current rating, `ttr_history:read` the history. Always with `fetchedAt` and the owner name.
+- The snapshot is deleted as soon as the last grant is revoked or expired.
+- Grants live in SQLite (`store/grantStore.ts`), snapshots in `store/snapshotStore.ts`, the rules in
+  `services/snapshots.ts`. Grants from the old `data/mytt-sessions.json` are imported on first start.
+
+The old server cookie routes (`/api/me/mytt/cookie`, `/ttr`, `/ttr-history`, `/head-to-head`, `/compare`) stay
+for old app versions during the transition and are removed afterwards.
+
 ## Adding a new kind of data
 
 1. **Source** in `mytt/`: fetch with `getJsonFromMytt` / `getRouteDataWithHtmlFallback`, no caching.
