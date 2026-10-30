@@ -449,6 +449,30 @@ export async function getClubPlayersFromAndroRanking(params: {
         });
     }
 
+    // Ein veralteter Override oder gemerkter Wert darf nicht verhindern, dass die click-tt Nummer selbst gilt.
+    if (initialResolution.clubNr !== params.clubNumber) {
+        const direct = await fetchAndroRankingRaw({
+            organization,
+            androClubNr: params.clubNumber
+        });
+
+        if (getAndroEntriesCount(direct.raw) > 0) {
+            setCachedResolvedAndroClubNr(
+                `${organization}:${params.clubNumber}`,
+                params.clubNumber
+            );
+
+            return normalizeAndroRankingResponse({
+                value: direct.raw,
+                organization,
+                clickttClubId: params.clubNumber,
+                androClubNr: params.clubNumber,
+                sourcePath: direct.sourcePath,
+                resolutionSource: "direct"
+            });
+        }
+    }
+
     const candidates = await findAndroClubNrCandidates({
         organization,
         clubName: params.clubName

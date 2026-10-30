@@ -5,8 +5,11 @@ import { CACHE_TTL } from "../constants.js";
 import {
     getPlayerHeadToHead,
     getPlayerTtr,
-    getPlayerTtrHistory
+    getPlayerTtrHistory,
+    lookupPublicPlayer,
+    toPublicRating
 } from "../mytt/index.js";
+import { estimatePlayerTtr } from "../rating/playerEstimate.js";
 import { resolveMyttSessionForRequest, type MyttScope } from "../myttSessionStore.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
@@ -710,6 +713,67 @@ function errorToResponse(error: unknown) {
 }
 
 export async function playerRoutes(app: FastifyInstance) {
+    // Öffentlicher TTR aus der Andro Rangliste des Vereins, ohne myTischtennis Login.
+    // Verein per organization und clubNumber oder, wenn er fehlt, über den Namen des Spielers.
+    app.get("/api/players/:nuid/rating", async (request, reply) => {
+        try {
+            const { nuid: rawNuid } = request.params as { nuid: string };
+            const nuid = normalizeNuid(rawNuid);
+
+            const query = request.query as {
+                organization?: string;
+                clubNumber?: string;
+                clubName?: string;
+                name?: string;
+            };
+
+            const organization = query.organization?.trim().toUpperCase() ?? "";
+            const clubNumber = query.clubNumber?.trim() ?? "";
+            const name = query.name?.trim() ?? "";
+
+            if (!nuid || nuid.length < 3) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "Ungültige Spieler-ID."
+                    }
+                });
+            }
+
+            if ((!organization || !clubNumber) && !name) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "organization und clubNumber oder name sind erforderlich."
+                    }
+                });
+            }
+
+            const hit = await lookupPublicPlayer({
+                nuid,
+                name,
+                organization,
+                clubNumber,
+                clubName: query.clubName?.trim() || undefined
+            });
+
+            const rating = hit ? toPublicRating(hit.player, hit.fetchedAt) : null;
+
+            return {
+                data: {
+                    nuid,
+                    available: rating !== null,
+                    rating,
+                    club: hit?.club ?? null
+                },
+                meta: hit ? buildMeta(hit) : { source: "upstream" }
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
     app.get("/api/players/:nuid/ttr", async (request, reply) => {
         try {
             const requestingUserId = getRequiredAppUserId(request);
@@ -736,6 +800,59 @@ export async function playerRoutes(app: FastifyInstance) {
                     ttr: result.ttr ?? null,
                     error: result.error ?? null
                 },
+                meta: buildMeta(cached)
+            };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
+    });
+
+    // Geschätzter TTR und Verlauf aus öffentlichen Spielberichten, ohne myTischtennis Login.
+    app.get("/api/players/:nuid/ttr-estimate", async (request, reply) => {
+        try {
+            const { nuid: rawNuid } = request.params as { nuid: string };
+            const nuid = normalizeNuid(rawNuid);
+
+            const query = request.query as {
+                organization?: string;
+                clubNumber?: string;
+                clubName?: string;
+                name?: string;
+            };
+
+            const organization = query.organization?.trim().toUpperCase() ?? "";
+            const clubNumber = query.clubNumber?.trim() ?? "";
+            const clubName = query.clubName?.trim() || undefined;
+            const name = query.name?.trim() || undefined;
+
+            if (!nuid || nuid.length < 3) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "Ungültige Spieler-ID."
+                    }
+                });
+            }
+
+            if ((!organization || !clubNumber) && !name) {
+                return reply.code(400).send({
+                    error: {
+                        code: "INVALID_INPUT",
+                        message: "organization und clubNumber oder name sind erforderlich."
+                    }
+                });
+            }
+
+            const cached = await readThrough({
+                key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}:${name ?? ""}`,
+                ttlMs: CACHE_TTL.PLAYER_TTR_ESTIMATE,
+                load: () =>
+                    estimatePlayerTtr({ nuid, organization, clubNumber, clubName, name })
+            });
+
+            return {
+                data: cached.value,
                 meta: buildMeta(cached)
             };
         } catch (error) {

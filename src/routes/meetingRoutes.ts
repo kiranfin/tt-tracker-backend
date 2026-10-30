@@ -1,20 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { readThrough } from "../cache/index.js";
-import { CACHE_TTL } from "../constants.js";
-import { getMeetingLive } from "../mytt/index.js";
-import type { MeetingLiveResponse } from "../schemas.js";
+import { getMeetingTtlMs, readMeeting } from "../mytt/cachedReads.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
-
-function getMeetingTtlMs(result: MeetingLiveResponse) {
-    if (result.data?.live === true) {
-        return CACHE_TTL.MEETING_LIVE;
-    }
-
-    return result.data?.is_completed === true
-        ? CACHE_TTL.MEETING_COMPLETED
-        : CACHE_TTL.MEETING_PLANNED;
-}
 
 export async function meetingRoutes(app: FastifyInstance) {
     app.get("/api/meetings/:meetingId/live", async (request, reply) => {
@@ -34,14 +21,7 @@ export async function meetingRoutes(app: FastifyInstance) {
         }
 
         try {
-            const result = await readThrough({
-                key: `meeting-live:${meetingId}`,
-                ttlMs: getMeetingTtlMs,
-                load: () =>
-                    getMeetingLive({
-                        meetingId
-                    })
-            });
+            const result = await readMeeting(meetingId);
 
             return {
                 data: result.value,

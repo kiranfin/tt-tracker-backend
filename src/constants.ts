@@ -2,6 +2,7 @@ export const CACHE_TTL = {
     PLAYER_SEARCH: 5 * 60 * 1000,
     PLAYER_TTR: 30 * 60 * 1000,
     PLAYER_TTR_HISTORY: 60 * 60 * 1000,
+    PLAYER_TTR_ESTIMATE: 30 * 60 * 1000,
 
     CLUB_SEARCH: 15 * 60 * 1000,
     CLUB_TEAMS: 60 * 60 * 1000,
@@ -21,4 +22,14 @@ export const CACHE_TTL = {
 
     EVENTS_LIST: 30 * 60 * 1000,
     EVENTS_DETAIL: 60 * 60 * 1000
+} as const;
+
+export const TTR_ESTIMATE = {
+    // Obergrenzen pro Anfrage, damit eine Schätzung nicht beliebig viele Abrufe bei myTischtennis auslöst.
+    MAX_MEETINGS: 40,
+    MAX_OPPONENT_CLUBS: 24,
+    CONCURRENCY: 4,
+    // Wie viele Tage der öffentliche Wert hinter den Spielberichten herhinkt. 0, bis die Aktualität der
+    // Andro Rangliste geprüft ist: dann steckt jedes gespielte Einzel schon im öffentlichen Wert.
+    PUBLIC_RATING_LAG_DAYS: 0
 } as const;

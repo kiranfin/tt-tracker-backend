@@ -4,46 +4,13 @@ import { CACHE_TTL } from "../constants.js";
 import {
     getClubHead,
     getClubInfo,
-    getClubPlayersFromAndroRanking,
-    getClubSchedule,
     getClubTeams
 } from "../mytt/index.js";
-import { isEmptyClubSchedule, ttlUnlessEmpty } from "../sources/validate.js";
+import { readClubPlayers } from "../mytt/clubPlayersCache.js";
+import { readClubSchedule } from "../mytt/cachedReads.js";
 import { handleApiError } from "../utils/errors.js";
 import { buildMeta } from "../utils/responseMeta.js";
-
-const CLUB_SCHEDULE_CACHE_TTL =
-    (CACHE_TTL as Record<string, number>).CLUB_SCHEDULE ?? CACHE_TTL.CLUB_TEAMS;
-
-const CLUB_PLAYERS_CACHE_TTL =
-    (CACHE_TTL as Record<string, number>).CLUB_PLAYERS ?? CACHE_TTL.CLUB_TEAMS;
-
-function getDefaultSeasonDates(season: string) {
-    const match = /^(\d{2})--(\d{2})$/.exec(season);
-
-    if (!match) {
-        return {
-            dateStart: undefined,
-            dateEnd: undefined
-        };
-    }
-
-    const startYear = 2000 + Number(match[1]);
-    const endYear = 2000 + Number(match[2]);
-
-    return {
-        dateStart: `${startYear}-07-01`,
-        dateEnd: `${endYear}-06-30`
-    };
-}
-
-// Saison wechselt zum 1. Juli, Format wie in den click-tt URLs ("26--27").
-function getCurrentSeasonSegment(now = new Date()) {
-    const startYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
-    const short = (year: number) => String(year % 100).padStart(2, "0");
-
-    return `${short(startYear)}--${short(startYear + 1)}`;
-}
+import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 
 const MAX_LOGO_BATCH = 30;
 const CLUB_REF_PATTERN = /^[A-Za-z0-9-]{2,12}:\d{3,10}$/;
@@ -227,25 +194,12 @@ export async function clubRoutes(app: FastifyInstance) {
             });
         }
 
-        const cacheKey = [
-            "club-players-andro",
-            organization,
-            clubNumber,
-            androClubNr ?? "",
-            clubName ?? ""
-        ].join(":");
-
         try {
-            const result = await readThrough({
-                key: cacheKey,
-                ttlMs: CLUB_PLAYERS_CACHE_TTL,
-                load: () =>
-                    getClubPlayersFromAndroRanking({
-                        organization,
-                        clubNumber,
-                        androClubNr,
-                        clubName
-                    })
+            const result = await readClubPlayers({
+                organization,
+                clubNumber,
+                androClubNr,
+                clubName
             });
 
             return {
@@ -299,29 +253,14 @@ export async function clubRoutes(app: FastifyInstance) {
             query.date_end?.trim() ||
             defaults.dateEnd;
 
-        const cacheKey = [
-            "club-schedule",
-            organization,
-            clubNumber,
-            season,
-            clubSlug,
-            dateStart ?? "",
-            dateEnd ?? ""
-        ].join(":");
-
         try {
-            const result = await readThrough({
-                key: cacheKey,
-                ttlMs: ttlUnlessEmpty(CLUB_SCHEDULE_CACHE_TTL, isEmptyClubSchedule),
-                load: () =>
-                    getClubSchedule({
-                        organization,
-                        clubNumber,
-                        season,
-                        clubSlug,
-                        dateStart,
-                        dateEnd
-                    })
+            const result = await readClubSchedule({
+                organization,
+                clubNumber,
+                season,
+                clubSlug,
+                dateStart,
+                dateEnd
             });
 
             return {
