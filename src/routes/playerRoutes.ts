@@ -3,11 +3,10 @@ import { getRequiredAppUserId } from "../appUser.js";
 import { readThrough, type ReadThroughResult } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
 import {
-    findPlayerInClubList,
     getPlayerHeadToHead,
     getPlayerTtr,
     getPlayerTtrHistory,
-    readClubPlayers,
+    lookupPublicPlayer,
     toPublicRating
 } from "../mytt/index.js";
 import { estimatePlayerTtr } from "../rating/playerEstimate.js";
@@ -715,6 +714,7 @@ function errorToResponse(error: unknown) {
 
 export async function playerRoutes(app: FastifyInstance) {
     // Öffentlicher TTR aus der Andro Rangliste des Vereins, ohne myTischtennis Login.
+    // Verein per organization und clubNumber oder, wenn er fehlt, über den Namen des Spielers.
     app.get("/api/players/:nuid/rating", async (request, reply) => {
         try {
             const { nuid: rawNuid } = request.params as { nuid: string };
@@ -723,12 +723,13 @@ export async function playerRoutes(app: FastifyInstance) {
             const query = request.query as {
                 organization?: string;
                 clubNumber?: string;
-                androClubNr?: string;
                 clubName?: string;
+                name?: string;
             };
 
             const organization = query.organization?.trim().toUpperCase() ?? "";
             const clubNumber = query.clubNumber?.trim() ?? "";
+            const name = query.name?.trim() ?? "";
 
             if (!nuid || nuid.length < 3) {
                 return reply.code(400).send({
@@ -739,32 +740,33 @@ export async function playerRoutes(app: FastifyInstance) {
                 });
             }
 
-            if (!organization || !clubNumber) {
+            if ((!organization || !clubNumber) && !name) {
                 return reply.code(400).send({
                     error: {
                         code: "INVALID_INPUT",
-                        message: "organization und clubNumber sind erforderlich."
+                        message: "organization und clubNumber oder name sind erforderlich."
                     }
                 });
             }
 
-            const cached = await readClubPlayers({
+            const hit = await lookupPublicPlayer({
+                nuid,
+                name,
                 organization,
                 clubNumber,
-                androClubNr: query.androClubNr?.trim() || undefined,
                 clubName: query.clubName?.trim() || undefined
             });
 
-            const player = findPlayerInClubList(cached.value.data, nuid);
-            const rating = player ? toPublicRating(player, cached.fetchedAt) : null;
+            const rating = hit ? toPublicRating(hit.player, hit.fetchedAt) : null;
 
             return {
                 data: {
                     nuid,
                     available: rating !== null,
-                    rating
+                    rating,
+                    club: hit?.club ?? null
                 },
-                meta: buildMeta(cached)
+                meta: hit ? buildMeta(hit) : { source: "upstream" }
             };
         } catch (error) {
             request.log.error(error);
@@ -815,10 +817,14 @@ export async function playerRoutes(app: FastifyInstance) {
             const query = request.query as {
                 organization?: string;
                 clubNumber?: string;
+                clubName?: string;
+                name?: string;
             };
 
             const organization = query.organization?.trim().toUpperCase() ?? "";
             const clubNumber = query.clubNumber?.trim() ?? "";
+            const clubName = query.clubName?.trim() || undefined;
+            const name = query.name?.trim() || undefined;
 
             if (!nuid || nuid.length < 3) {
                 return reply.code(400).send({
@@ -829,19 +835,20 @@ export async function playerRoutes(app: FastifyInstance) {
                 });
             }
 
-            if (!organization || !clubNumber) {
+            if ((!organization || !clubNumber) && !name) {
                 return reply.code(400).send({
                     error: {
                         code: "INVALID_INPUT",
-                        message: "organization und clubNumber sind erforderlich."
+                        message: "organization und clubNumber oder name sind erforderlich."
                     }
                 });
             }
 
             const cached = await readThrough({
-                key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}`,
+                key: `player-ttr-estimate:${nuid}:${organization}:${clubNumber}:${name ?? ""}`,
                 ttlMs: CACHE_TTL.PLAYER_TTR_ESTIMATE,
-                load: () => estimatePlayerTtr({ nuid, organization, clubNumber })
+                load: () =>
+                    estimatePlayerTtr({ nuid, organization, clubNumber, clubName, name })
             });
 
             return {

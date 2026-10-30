@@ -1,5 +1,6 @@
 import { readThrough } from "../cache/index.js";
 import { CACHE_TTL } from "../constants.js";
+import { ttlUnlessEmpty } from "../sources/validate.js";
 import { getClubPlayersFromAndroRanking } from "./androRanking.js";
 
 const CLUB_PLAYERS_CACHE_TTL =
@@ -25,7 +26,7 @@ export function readClubPlayers(params: {
 
     return readThrough({
         key,
-        ttlMs: CLUB_PLAYERS_CACHE_TTL,
+        ttlMs: ttlUnlessEmpty(CLUB_PLAYERS_CACHE_TTL, (list) => list.data.length === 0),
         load: () => getClubPlayersFromAndroRanking(params)
     });
 }

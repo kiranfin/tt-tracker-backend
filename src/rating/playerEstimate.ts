@@ -1,12 +1,8 @@
 import { TTR_ESTIMATE } from "../constants.js";
 import { getClubScheduleMeetings, readClubSchedule, readMeeting } from "../mytt/cachedReads.js";
 import { readClubPlayers } from "../mytt/clubPlayersCache.js";
-import {
-    findPlayerInClubList,
-    normalizePlayerId,
-    toPublicRating,
-    type PlayerRating
-} from "../mytt/rating.js";
+import { lookupPublicPlayer } from "../mytt/playerLookup.js";
+import { normalizePlayerId, toPublicRating, type PlayerRating } from "../mytt/rating.js";
 import { asNullableNumber } from "../mytt/values.js";
 import { getCurrentSeasonSegment, getDefaultSeasonDates } from "../utils/season.js";
 import { buildTimeline, type EstimatedEvent, type RatedSingle } from "./estimate.js";
@@ -79,13 +75,17 @@ function getPastMeetingIds(schedule: Parameters<typeof getClubScheduleMeetings>[
 
 /** Öffentliche Werte der Gegner, nach Person gesucht in den (gecachten) Vereinslisten. */
 async function loadOpponentRatings(singles: PlayerSingle[]) {
-    const clubs = new Map<string, { organization: string; clubNumber: string }>();
+    const clubs = new Map<string, { organization: string; clubNumber: string; clubName?: string }>();
 
     for (const single of singles) {
-        const { organization, clubNumber } = single.opponent;
+        const { organization, clubNumber, clubName } = single.opponent;
 
         if (organization && clubNumber) {
-            clubs.set(`${organization}:${clubNumber}`, { organization: organization.toUpperCase(), clubNumber });
+            clubs.set(`${organization}:${clubNumber}`, {
+                organization: organization.toUpperCase(),
+                clubNumber,
+                clubName: clubName ?? undefined
+            });
         }
     }
 
@@ -114,8 +114,11 @@ async function loadOpponentRatings(singles: PlayerSingle[]) {
 
 export async function estimatePlayerTtr(params: {
     nuid: string;
-    organization: string;
-    clubNumber: string;
+    organization?: string;
+    clubNumber?: string;
+    clubName?: string;
+    /** Name des Spielers, um den Verein zu finden, wenn er nicht angegeben ist. */
+    name?: string;
     now?: number;
 }): Promise<PlayerTtrEstimate> {
     const now = params.now ?? Date.now();
@@ -139,24 +142,28 @@ export async function estimatePlayerTtr(params: {
         assumptions: { k: BASE_K, lagDays }
     });
 
-    const clubList = await readClubPlayers({
+    const hit = await lookupPublicPlayer({
+        nuid: params.nuid,
+        name: params.name,
         organization: params.organization,
-        clubNumber: params.clubNumber
+        clubNumber: params.clubNumber,
+        clubName: params.clubName
     });
 
-    const player = findPlayerInClubList(clubList.value.data, params.nuid);
-    const publicRating = player ? toPublicRating(player, clubList.fetchedAt) : null;
+    const publicRating = hit ? toPublicRating(hit.player, hit.fetchedAt) : null;
 
-    if (!publicRating) {
+    if (!hit || !publicRating) {
         return empty(null);
     }
+
+    const club = hit.club;
 
     const season = getCurrentSeasonSegment(new Date(now));
     const { dateStart, dateEnd } = getDefaultSeasonDates(season);
 
     const schedule = await readClubSchedule({
-        organization: params.organization,
-        clubNumber: params.clubNumber,
+        organization: club.organization,
+        clubNumber: club.clubNumber,
         season,
         clubSlug: "x",
         dateStart,

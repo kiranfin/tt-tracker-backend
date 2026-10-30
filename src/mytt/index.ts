@@ -5,6 +5,7 @@ export * from "./league.js";
 export * from "./leagueDiscovery.js";
 export * from "./meeting.js";
 export * from "./player.js";
+export * from "./playerLookup.js";
 export * from "./rating.js";
 export * from "./search.js";
 export * from "./team.js";

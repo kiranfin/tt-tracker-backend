@@ -16,11 +16,20 @@ export type PlayerSingle = {
         /** Verband und Vereinsnummer des Gegners, um seinen öffentlichen Wert in der Vereinsliste zu finden. */
         organization: string | null;
         clubNumber: string | null;
+        /** Vereinsname aus dem Mannschaftsnamen, hilft bei der Suche nach der Andro Vereinsnummer. */
+        clubName: string | null;
     };
 };
 
 function playerName(player: MeetingPlayer) {
     return `${player.firstname ?? ""} ${player.lastname ?? ""}`.trim();
+}
+
+/** "TTV Pleidelsheim III" wird zu "TTV Pleidelsheim". */
+function toClubName(teamName: string | null | undefined) {
+    const name = teamName?.replace(/\s+(?:[IVX]+|\d+)$/i, "").trim();
+
+    return name ? name : null;
 }
 
 function asString(value: unknown) {
@@ -92,7 +101,8 @@ export function extractPlayerSingles(
                 personId: opponent.person_id!,
                 name: playerName(opponent),
                 organization: asString(opponentRecord.player_fed_nickname) ?? meetingOrganization,
-                clubNumber: isHome ? guestClubNumber : homeClubNumber
+                clubNumber: isHome ? guestClubNumber : homeClubNumber,
+                clubName: toClubName(isHome ? meeting.team_guest : meeting.team_home)
             }
         });
     }
