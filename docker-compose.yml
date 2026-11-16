@@ -1,0 +1,26 @@
+services:
+  backend:
+    build: .
+    image: tt-tracker-backend:latest
+    container_name: tt-tracker-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides HOST/PORT from .env: inside the container the server must bind to all interfaces.
+      HOST: 0.0.0.0
+      PORT: 4001
+    ports:
+      # Only reachable from the host itself (reverse proxy). The host port follows PORT from .env,
+      # so the reverse proxy config does not need to change.
+      - "127.0.0.1:${PORT:-4001}:4001"
+    volumes:
+      # Users, sessions, password resets, cache.json and store.db survive rebuilds.
+      - ./data:/app/data
+      - ./logs:/app/logs
+    # Give the server time to flush the cache and close SQLite on `docker compose down`.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

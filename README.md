@@ -14,9 +14,10 @@ Use it at your own risk. Contributions, feedback, and improvements are welcome.
 - [Responsibilities](#responsibilities)
 - [Requirements](#requirements)
 - [Installation on a Server](#installation-on-a-server)
-- [Starting the Backend Normally](#starting-the-backend-normally)
+- [Running the Backend with Docker](#running-the-backend-with-docker)
 - [Updating the Backend](#updating-the-backend)
-- [Running the Backend with Forever](#running-the-backend-with-forever)
+- [Switching from Forever to Docker](#switching-from-forever-to-docker)
+- [Local Development](#local-development)
 - [Operations](#operations)
 
 ---
@@ -43,120 +44,100 @@ The matching frontend app can be found here:
 
 ## Requirements ⚙️
 
-Before installing the backend, ensure that the server has the following installed:
+On the server you need:
 
-- **Node.js**
-- **npm**
+- **Docker** with the **Compose plugin** (`docker compose`)
 - **Git**
 
 You can check this with:
 
 ```bash
-node -v
-npm -v
+docker --version
+docker compose version
 git --version
 ```
+
+Node.js and npm are only needed for local development.
 
 ---
 
 ## Installation on a Server 🚀
 
-1. Clone the repository:
+1. Clone the repository and go into the project folder:
    ```bash
    git clone https://github.com/kiranfin/tt-tracker-backend.git
-   ```
-
-2. Go into the project folder:
-   ```bash
    cd tt-tracker-backend
    ```
 
-3. Install the dependencies:
-   ```bash
-   npm install
-   ```
-
-4. Copy the `.env.example` file to `.env`:
+2. Copy the `.env.example` file to `.env` and fill in the secrets:
    ```bash
    cp .env.example .env
    ```
 
+3. Create the data folders and give them to the container user (`node`, uid 1000):
+   ```bash
+   mkdir -p data logs
+   sudo chown -R 1000:1000 data logs
+   ```
+
+4. Build and start the container:
+   ```bash
+   docker compose up -d --build
+   ```
+
+The container is published on `127.0.0.1:${PORT}` of the host (default 4001), so it stays behind the reverse proxy. `HOST` from `.env` is ignored inside the container. `data/` (users, sessions, `store.db`, `cache.json`) and `logs/` are mounted from the project folder and survive rebuilds.
+
 ---
 
-## Starting the Backend Normally 🔄
-
-Start the backend with:
+## Running the Backend with Docker 🐳
 
 ```bash
-npm run build
-npm run start
+docker compose up -d --build   # build and start (or apply code changes)
+docker compose ps              # status incl. health check (GET /health)
+docker compose logs -f         # follow the server log
+docker compose restart         # restart, e.g. after editing .env
+docker compose down            # stop (the cache is saved to data/cache.json first)
 ```
 
-### Local Development
-
-For testing the app on a phone against your PC, set `HOST=0.0.0.0` in `.env` so the backend is reachable in your Wi-Fi, then run:
-
-```bash
-npm run dev
-```
-
-This restarts automatically on file changes. On the server keep the default `HOST=127.0.0.1` behind the reverse proxy.
+The container restarts automatically after a crash or a server reboot (`restart: unless-stopped`).
 
 ---
 
 ## Updating the Backend 🔄
 
-To pull the latest changes:
-
 ```bash
 git pull
+docker compose up -d --build
 ```
 
-Install new dependencies if needed:
-
-```bash
-npm install
-```
-
-Then start the backend again:
-
-```bash
-npm run start
-```
-
-`npm run start` builds `dist/` first (`prestart`), so a `git pull` can no longer leave the server running an old build.
+The image builds `dist/` from the current source, so a `git pull` can never leave an old build running. Remove old images now and then with `docker image prune`.
 
 ---
 
-## Running the Backend with Forever 🌙
+## Switching from Forever to Docker 🔁
 
-Forever can be used to keep the backend running in the background on a server.
+Run this once on the server, in the project folder:
 
-### Install Forever
+1. Pull the latest code: `git pull`
+2. Stop the old process: `forever stop tt-tracker-backend` (it saves the cache to `data/cache.json` on exit). Check with `forever list` that nothing is left.
+3. Give the existing data to the container user: `sudo chown -R 1000:1000 data logs`
+4. Start the container: `docker compose up -d --build`
+5. Check it: `docker compose ps` should show `healthy`, and `curl http://127.0.0.1:4001/health` should return `{"ok":true,...}`.
 
-```bash
-npm install -g forever
-```
+The reverse proxy does not need to change as long as `PORT` in `.env` stays the same. If something goes wrong, run `docker compose down` and start forever again as before. Once Docker runs fine, remove forever with `npm uninstall -g forever`.
 
-### Start the Backend with Forever
+---
 
-```bash
-forever start -a --uid tt-tracker-backend npm -- run start
-```
+## Local Development
 
-This command starts the backend in the background and assigns it the process name: `tt-tracker-backend`.
-
-You can check running forever processes with:
+For testing the app on a phone against your PC, run without Docker:
 
 ```bash
-forever list
+npm install
+npm run dev
 ```
 
-### Stop the Backend with Forever
-
-```bash
-forever stop tt-tracker-backend
-```
+Set `HOST=0.0.0.0` in `.env` so the backend is reachable in your Wi-Fi. This restarts automatically on file changes. A production build without Docker runs with `npm run start` (builds `dist/` first).
 
 ---
 
@@ -165,4 +146,4 @@ forever stop tt-tracker-backend
 - **Status:** `GET /debug/status` with the header `x-api-key` (`TTTRACKER_API_KEY`). It shows the challenge state (`challenge`), the queue and breakers (`rateLimit`), the budget per data kind (`data`: entries, age, next refresh and requests of the last 30 minutes), background jobs, cache, store and the last canary report.
 - **If myTischtennis blocks the server IP** (redirect to `/verify`, a captcha page): the backend pauses all requests for 6 hours, then sends a single probe and doubles the pause on every new challenge (up to 24 hours). The app keeps showing cached data. The captcha is never solved or bypassed; reduce traffic and contact myTischtennis. Test the behaviour locally with `MYTT_FORCE_CHALLENGE=true`.
 - **Request log:** `logs/requests.jsonl` is rotated at 20 MB and the last 3 files are kept (`TTTRACKER_LOG_MAX_BYTES`, `TTTRACKER_LOG_KEEP_FILES`). Count upstream requests with `type: "mytt_upstream_request"`.
-- **After a deploy:** check that `dist/` was rebuilt (`npm run start` builds first) and that the `forever` log shows the new start.
+- **After a deploy:** check that `docker compose ps` shows the container as `healthy` and that `docker compose logs` shows the new start.
