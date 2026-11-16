@@ -12,6 +12,7 @@ import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
 import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
+import { getMailStatus, verifyMailTransport } from "./mailer.js";
 import { getBackgroundJobStatus } from "./services/jobs.js";
 import { getDataStatus } from "./services/status.js";
 import { getChallengeStatus, getRateLimitStatus } from "./upstream/rateLimiter.js";
@@ -183,7 +184,8 @@ app.get("/debug/status", async () => {
         store: getStoreStatus(),
         upstream: getUpstreamUsage(),
         relay: getRelayStatus(),
-        canary: getLastCanaryReport()
+        canary: getLastCanaryReport(),
+        mail: getMailStatus()
     };
 });
 
@@ -216,6 +218,16 @@ try {
     app.log.info(`Server läuft auf http://${host}:${port}`);
 
     startCanarySchedule();
+
+    // Check the SMTP login once at startup, so a wrong password shows up here and not only when a user
+    // misses their reset mail. Sends nothing.
+    void verifyMailTransport().then((status) => {
+        if (status.lastOk) {
+            app.log.info("SMTP login ok, password reset mails can be sent");
+        } else {
+            app.log.warn({ mail: status.lastError }, "SMTP not usable, password reset mails will not be sent");
+        }
+    });
 
     // Cache vor dem Beenden sichern, damit ein Neustart nicht mit leerem Cache beginnt.
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
