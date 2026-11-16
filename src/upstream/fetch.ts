@@ -14,6 +14,7 @@ import {
     parseRateLimitHeader,
     reportUpstreamResult
 } from "./rateLimiter.js";
+import { tryRelay } from "./relay.js";
 import { trackUpstreamRequest } from "./tracker.js";
 
 export type UpstreamRequest = {
@@ -214,6 +215,16 @@ export async function fetchUpstreamText(request: UpstreamRequest): Promise<Upstr
         myttPath: request.path,
         myttUrl: url
     };
+
+    // Device Relay: die Antwort kommt vom Handy (oder fehlt noch, dann wirft tryRelay). Kein Server Traffic,
+    // deshalb weder Slot noch Budget noch Breaker.
+    const relayed = tryRelay(request);
+
+    if (relayed) {
+        void writeJsonLog("mytt_relay_served", { ...logBase, status: relayed.response.status });
+
+        return relayed;
+    }
 
     const counted = isCounted(request);
     const lane = getUpstreamLane(request.path);

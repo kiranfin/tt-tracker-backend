@@ -7,6 +7,8 @@ import {
 } from "../myttSessionStore.js";
 import {
     LocalRateLimitError,
+    RelayRequiredError,
+    RelayThrottledError,
     UpstreamChallengeError,
     UpstreamDisabledError,
     UpstreamError,
@@ -189,6 +191,25 @@ export function handleApiError(error: unknown, reply: FastifyReply) {
             error: {
                 code: "STORE_UNAVAILABLE",
                 message: "Die Ablage ist gerade nicht verfügbar."
+            }
+        });
+    }
+
+    // Device Relay: die App soll die Daten bei myTischtennis holen. Die Requests hängt der preSerialization Hook an.
+    if (error instanceof RelayRequiredError) {
+        return reply.code(409).send({
+            error: {
+                code: "RELAY_REQUIRED",
+                message: "Diese Daten müssen vom Gerät bei myTischtennis abgerufen werden."
+            }
+        });
+    }
+
+    if (error instanceof RelayThrottledError) {
+        return reply.code(429).send({
+            error: {
+                code: "RELAY_THROTTLED",
+                message: "Zu viele Uploads von diesem Gerät."
             }
         });
     }

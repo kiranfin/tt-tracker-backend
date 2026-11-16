@@ -1,4 +1,5 @@
 import { cacheKeys } from "../cacheKeys.js";
+import { config } from "../config.js";
 import { peekCached, peekUsableCached, putCached } from "../cache/index.js";
 import { getClubPlayersFromAndroRanking, type ResolvedAndroClubNrStore } from "../mytt/androRanking.js";
 import {
@@ -11,6 +12,7 @@ import {
 import { DATA_POLICIES, getFreshMs } from "../policies.js";
 import type { ClubPlayersResponse, ClubScheduleResponse } from "../schemas.js";
 import { runWithDataKind } from "../upstream/dataKind.js";
+import { getRelayState } from "../upstream/relay.js";
 import { getCurrentSeasonSegment } from "../utils/season.js";
 import { scheduleBackground } from "./jobs.js";
 import { readByPolicy, type ServiceResult } from "./read.js";
@@ -46,12 +48,22 @@ export type ClubLogoResult = {
 };
 
 /**
- * Logos für mehrere Vereine. Liefert nur, was schon im Cache liegt, und plant fehlende (oder
- * abgelaufene) Logos als Hintergrundjobs ein. Eine Antwort löst nie mehr als null Abrufe aus.
+ * Logos für mehrere Vereine. Liefert, was schon im Cache liegt.
+ *
+ * Ohne Device Relay werden fehlende (oder abgelaufene) Logos als Hintergrundjobs eingeplant, eine Antwort
+ * löst dann nie mehr als null Abrufe aus.
+ *
+ * Mit Device Relay laufen keine Server Jobs (sie liefen am Relay vorbei und kosteten die Server IP). Stattdessen
+ * werden die ersten `relay.logoHeadsPerCall` Vereine ohne brauchbaren Eintrag über das Handy geholt: Fehlt die
+ * Antwort in der Inbox, steht der Request in relay.misses und die App holt ihn. Die Reihenfolge ist stabil,
+ * beim nächsten Abruf sind dieselben Vereine wieder die ersten fehlenden. Danach ist der Deckel erreicht, es
+ * entstehen keine neuen Misses, und der Rest folgt bei einem späteren Abruf.
  */
-export function getClubLogos(refs: string[]): ClubLogoResult {
+export async function getClubLogos(refs: string[]): Promise<ClubLogoResult> {
     const logos: Record<string, string | null> = {};
     const pending: string[] = [];
+    const relay = getRelayState();
+    let headsLeft = relay ? config.relay.logoHeadsPerCall : 0;
 
     for (const ref of refs) {
         const [organization, clubNumber] = ref.split(":") as [string, string];
@@ -60,13 +72,35 @@ export function getClubLogos(refs: string[]): ClubLogoResult {
 
         if (usable) {
             logos[ref] = usable.logoUrl;
-        } else {
-            pending.push(ref);
+            continue;
         }
 
-        if (peekCached<ClubHead>(key) === undefined) {
-            scheduleBackground(`club-head:${ref}`, () => readClubHead(organization, clubNumber));
+        if (!relay) {
+            pending.push(ref);
+
+            if (peekCached<ClubHead>(key) === undefined) {
+                scheduleBackground(`club-head:${ref}`, () => readClubHead(organization, clubNumber));
+            }
+
+            continue;
         }
+
+        if (headsLeft > 0) {
+            headsLeft -= 1;
+
+            try {
+                const head = await readClubHead(organization, clubNumber);
+
+                logos[ref] = head.value.logoUrl;
+
+                continue;
+            } catch {
+                // RelayRequiredError: der Miss steht in relay.misses und geht mit der Antwort an die App.
+                // Ein anderer Fehler: der Verein bleibt offen.
+            }
+        }
+
+        pending.push(ref);
     }
 
     return { logos, pending };

@@ -12,13 +12,17 @@ import { teamRoutes } from "./routes/teamRoutes.js";
 import { eventRoutes } from "./routes/eventRoutes.js";
 import { adminRoutes } from "./routes/adminRoutes.js";
 import { getLastCanaryReport, startCanarySchedule } from "./canary/runCanary.js";
+import { getMailStatus, verifyMailTransport } from "./mailer.js";
 import { getBackgroundJobStatus } from "./services/jobs.js";
 import { getDataStatus } from "./services/status.js";
 import { getChallengeStatus, getRateLimitStatus } from "./upstream/rateLimiter.js";
 import { flushCacheToDisk, getCacheStatus, initCachePersistence } from "./cache/index.js";
 import { closeStore, getStoreDb, getStoreStatus } from "./store/db.js";
 import { getUpstreamUsage } from "./upstream/tracker.js";
-import { requestContext } from "./requestContext.js";
+import { requestContext, type RequestContext } from "./requestContext.js";
+import { config } from "./config.js";
+import { relayRoutes } from "./routes/relayRoutes.js";
+import { attachRelayRequests, buildRelayUploader, getRelayStatus } from "./services/relay.js";
 import { writeJsonLog } from "./fileLogger.js";
 import { myttSessionRoutes } from "./routes/myttSessionRoutes.js";
 import { authRoutes } from "./routes/authRoutes.js";
@@ -54,7 +58,7 @@ app.addHook("onRequest", (request, reply, done) => {
             ? rawAppUserId.trim().toLowerCase()
             : null;
 
-    const context = {
+    const context: RequestContext = {
         requestId: request.id,
         method: request.method,
         url: request.url,
@@ -62,6 +66,20 @@ app.addHook("onRequest", (request, reply, done) => {
         userAgent: request.headers["user-agent"],
         appUserId
     };
+
+    // Device Relay: die App holt fehlende myTT Antworten selbst und lädt sie hoch.
+    if (config.relay.enabled && request.headers["x-tt-relay"] === "1") {
+        context.relay = { uploader: buildRelayUploader(null, request.ip), misses: [], served: 0 };
+
+        // Höchstalter: die App will z.B. auf der Startseite Daten, die höchstens 5 Minuten alt sind. Das gilt nur
+        // über das Relay, denn dann holt das Handy die Daten. Die Server IP zahlt nie dafür.
+        const rawMaxAge = request.headers["x-tt-max-age"];
+        const maxAgeSeconds = typeof rawMaxAge === "string" ? Number(rawMaxAge) : NaN;
+
+        if (Number.isFinite(maxAgeSeconds) && maxAgeSeconds > 0) {
+            context.maxAgeMs = Math.max(config.relay.minMaxAgeMs, maxAgeSeconds * 1000);
+        }
+    }
 
     requestContext.run(context, () => {
         void writeJsonLog("backend_request", {
@@ -126,6 +144,16 @@ app.addHook("preHandler", async (request, reply) => {
 
         if (context) {
             context.appUserId = user?.id ?? null;
+
+            if (context.relay) {
+                if (config.relay.requireAuth && !user) {
+                    // Ohne Login kein Relay: der Request läuft klassisch über den Server.
+                    context.relay = undefined;
+                    context.maxAgeMs = undefined;
+                } else {
+                    context.relay.uploader = buildRelayUploader(user?.id, request.ip);
+                }
+            }
         }
     } catch (error) {
         request.log.error(error);
@@ -139,6 +167,13 @@ app.addHook("preHandler", async (request, reply) => {
     }
 });
 
+// Fehlen noch myTT Antworten, bekommt die App die Requests mit der Antwort (auch mit altem Stand).
+app.addHook("preSerialization", async (_request, _reply, payload) => {
+    const misses = getRequestContext()?.relay?.misses;
+
+    return misses && misses.length > 0 ? attachRelayRequests(payload, misses) : payload;
+});
+
 app.get("/debug/status", async () => {
     return {
         challenge: getChallengeStatus(),
@@ -148,7 +183,9 @@ app.get("/debug/status", async () => {
         cache: getCacheStatus(),
         store: getStoreStatus(),
         upstream: getUpstreamUsage(),
-        canary: getLastCanaryReport()
+        relay: getRelayStatus(),
+        canary: getLastCanaryReport(),
+        mail: getMailStatus()
     };
 });
 
@@ -163,6 +200,7 @@ await app.register(myttSessionRoutes);
 await app.register(snapshotRoutes);
 await app.register(teamRoutes);
 await app.register(eventRoutes);
+await app.register(relayRoutes);
 await app.register(adminRoutes);
 
 const port = Number(process.env.PORT ?? 4001);
@@ -180,6 +218,16 @@ try {
     app.log.info(`Server läuft auf http://${host}:${port}`);
 
     startCanarySchedule();
+
+    // Check the SMTP login once at startup, so a wrong password shows up here and not only when a user
+    // misses their reset mail. Sends nothing.
+    void verifyMailTransport().then((status) => {
+        if (status.lastOk) {
+            app.log.info("SMTP login ok, password reset mails can be sent");
+        } else {
+            app.log.warn({ mail: status.lastError }, "SMTP not usable, password reset mails will not be sent");
+        }
+    });
 
     // Cache vor dem Beenden sichern, damit ein Neustart nicht mit leerem Cache beginnt.
     for (const signal of ["SIGINT", "SIGTERM"] as const) {

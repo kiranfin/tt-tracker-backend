@@ -11,6 +11,79 @@ export class MailNotConfiguredError extends Error {
 let cachedTransporter: Transporter | null = null;
 let cachedFrom: string | null = null;
 
+export type MailError = {
+    code: string | null;
+    responseCode: number | null;
+    message: string;
+};
+
+export type MailStatus = {
+    configured: boolean;
+    lastCheckAt: string | null;
+    lastOk: boolean | null;
+    lastError: MailError | null;
+};
+
+let lastCheckAt: string | null = null;
+let lastOk: boolean | null = null;
+let lastError: MailError | null = null;
+
+function isMailConfigured() {
+    try {
+        getMailConfig();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function getMailStatus(): MailStatus {
+    return { configured: isMailConfigured(), lastCheckAt, lastOk, lastError };
+}
+
+/**
+ * Short description without credentials. 535 almost always means a wrong password or SMTP access that is
+ * switched off in the mailbox settings (web.de/GMX).
+ */
+export function describeMailError(error: unknown): MailError {
+    if (error instanceof MailNotConfiguredError) {
+        return { code: "NOT_CONFIGURED", responseCode: null, message: "SMTP_HOST, SMTP_USER or SMTP_PASS missing" };
+    }
+
+    const details = (error ?? {}) as { code?: unknown; responseCode?: unknown; response?: unknown; message?: unknown };
+    const responseCode = typeof details.responseCode === "number" ? details.responseCode : null;
+    const raw = String(details.response ?? details.message ?? "unknown error").slice(0, 200);
+    const hint =
+        responseCode === 535
+            ? " (SMTP login rejected: check SMTP_PASS and, for web.de/GMX, enable POP3/IMAP/SMTP access in the mailbox settings)"
+            : "";
+
+    return {
+        code: typeof details.code === "string" ? details.code : null,
+        responseCode,
+        message: raw + hint
+    };
+}
+
+function recordMailResult(error: unknown) {
+    lastCheckAt = new Date().toISOString();
+    lastOk = error === null;
+    lastError = error === null ? null : describeMailError(error);
+}
+
+/** Checks connection and login at the SMTP server without sending anything. Never throws. */
+export async function verifyMailTransport(): Promise<MailStatus> {
+    try {
+        const { transporter } = getTransporter();
+        await transporter.verify();
+        recordMailResult(null);
+    } catch (error) {
+        recordMailResult(error);
+    }
+
+    return getMailStatus();
+}
+
 function getMailConfig() {
     const host = process.env.SMTP_HOST;
     const user = process.env.SMTP_USER;
@@ -66,15 +139,21 @@ async function sendMail(params: {
     html: string;
     text: string;
 }) {
-    const { transporter, from } = getTransporter();
+    try {
+        const { transporter, from } = getTransporter();
 
-    await transporter.sendMail({
-        from,
-        to: params.to,
-        subject: params.subject,
-        html: params.html,
-        text: params.text
-    });
+        await transporter.sendMail({
+            from,
+            to: params.to,
+            subject: params.subject,
+            html: params.html,
+            text: params.text
+        });
+        recordMailResult(null);
+    } catch (error) {
+        recordMailResult(error);
+        throw error;
+    }
 }
 
 function escapeHtml(value: string) {

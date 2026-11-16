@@ -31,6 +31,55 @@ describe("ResilientCache", () => {
         assert.equal(loads, 1);
     });
 
+    it("reloads an entry that is still fresh by TTL but older than maxAgeMs", async () => {
+        const { cache, clock } = createCache();
+        let loads = 0;
+        const load = async () => ++loads;
+
+        await cache.readThrough({ key: "k", ttlMs: 10_000, load });
+
+        clock.now += 4000;
+
+        // Ohne maxAgeMs bleibt es beim Treffer.
+        const plain = await cache.readThrough({ key: "k", ttlMs: 10_000, load });
+
+        assert.equal(plain.source, "cache");
+        assert.equal(loads, 1);
+
+        // Jünger als maxAgeMs: weiter ein Treffer.
+        const young = await cache.readThrough({ key: "k", ttlMs: 10_000, load, maxAgeMs: 5000 });
+
+        assert.equal(young.source, "cache");
+        assert.equal(loads, 1);
+
+        // Älter als maxAgeMs: neu laden.
+        const old = await cache.readThrough({ key: "k", ttlMs: 10_000, load, maxAgeMs: 3000 });
+
+        assert.equal(old.source, "upstream");
+        assert.equal(old.value, 2);
+        assert.equal(loads, 2);
+    });
+
+    it("serves the old entry as stale when the reload for maxAgeMs fails", async () => {
+        const { cache, clock } = createCache();
+
+        await cache.readThrough({ key: "k", ttlMs: 10_000, load: async () => "old" });
+
+        clock.now += 4000;
+
+        const result = await cache.readThrough({
+            key: "k",
+            ttlMs: 10_000,
+            maxAgeMs: 1000,
+            load: async () => {
+                throw new Error("down");
+            }
+        });
+
+        assert.equal(result.source, "stale");
+        assert.equal(result.value, "old");
+    });
+
     it("keeps the origin of an html load on cache hits and stale answers", async () => {
         const { cache, clock } = createCache();
 
@@ -216,5 +265,78 @@ describe("ResilientCache", () => {
 
         assert.equal(result.source, "stale");
         assert.equal(result.value, "persisted");
+    });
+
+    it("serves the old value without a retry pause when the error skips the retry delay", async () => {
+        const { cache, clock } = createCache();
+        const failures: unknown[] = [];
+
+        cache.set("k", "old", 1000);
+        clock.now += 5000;
+
+        const waiting = Object.assign(new Error("waiting for device"), { skipRetryDelay: true });
+        const first = await cache.readThrough({
+            key: "k",
+            ttlMs: 1000,
+            load: async () => {
+                throw waiting;
+            }
+        });
+
+        assert.equal(first.source, "stale");
+        assert.equal(first.value, "old");
+        assert.equal(cache.status().loadFailures, 0);
+
+        // Kein retryAt: der nächste Versuch lädt sofort wieder.
+        const second = await cache.readThrough({ key: "k", ttlMs: 1000, load: async () => "new" });
+
+        assert.equal(second.value, "new");
+        assert.deepEqual(failures, []);
+    });
+
+    it("rethrows a skip-retry-delay error when there is no old value", async () => {
+        const { cache } = createCache();
+        const waiting = Object.assign(new Error("waiting for device"), { skipRetryDelay: true });
+
+        await assert.rejects(
+            cache.readThrough({
+                key: "none",
+                ttlMs: 1000,
+                load: async () => {
+                    throw waiting;
+                }
+            }),
+            waiting
+        );
+    });
+
+    it("does not pause or report a background refresh that skips the retry delay", async () => {
+        const reported: unknown[] = [];
+        const clock = { now: 1_000_000 };
+        const cache = new ResilientCache({
+            maxEntries: 100,
+            staleMaxAgeMs: 60_000,
+            failedLoadRetryMs: 5_000,
+            now: () => clock.now,
+            onRefreshFailed: (info) => reported.push(info)
+        });
+
+        cache.set("k", "old", 1000);
+        clock.now += 5000;
+
+        const waiting = Object.assign(new Error("waiting for device"), { skipRetryDelay: true });
+
+        await cache.readThrough({
+            key: "k",
+            ttlMs: 1000,
+            swr: true,
+            load: async () => {
+                throw waiting;
+            }
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.deepEqual(reported, []);
+        assert.equal(cache.status().refreshFailures, 0);
     });
 });
