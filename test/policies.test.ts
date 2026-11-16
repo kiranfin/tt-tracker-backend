@@ -28,13 +28,13 @@ describe("data policies", () => {
             ["CLUB_SEARCH", DAY],
             ["PLAYER_TTR", 30 * MINUTE],
             ["PLAYER_TTR_HISTORY", HOUR],
-            ["CLUB_TEAMS", HOUR],
+            ["CLUB_TEAMS", 12 * HOUR],
             ["CLUB_INFO", 12 * HOUR],
             ["CLUB_HEAD", 30 * DAY],
             ["ANDRO_CLUB_NR", 30 * DAY],
-            ["TEAM_PLAYERS", 10 * MINUTE],
-            ["TEAM_SIMPLE_SCHEDULE", 5 * MINUTE],
-            ["TEAM_INFOS", 15 * MINUTE],
+            ["TEAM_PLAYERS", 6 * HOUR],
+            ["TEAM_SIMPLE_SCHEDULE", HOUR],
+            ["TEAM_INFOS", 12 * HOUR],
             ["EVENTS_LIST", 30 * MINUTE],
             ["EVENTS_DETAIL", HOUR]
         ];
@@ -48,7 +48,7 @@ describe("data policies", () => {
         assert.equal(getFreshMs("LEAGUE_TABLE", { data: [] }), EMPTY_RESULT_FRESH_MS);
         assert.equal(getFreshMs("LEAGUE_TABLE", { data: [{}] }), 15 * MINUTE);
         assert.equal(getFreshMs("CLUB_PLAYERS", { data: [] }), EMPTY_RESULT_FRESH_MS);
-        assert.equal(getFreshMs("CLUB_PLAYERS", { data: [{}] }), HOUR);
+        assert.equal(getFreshMs("CLUB_PLAYERS", { data: [{}] }), 6 * HOUR);
         assert.equal(getFreshMs("LEAGUE_REGIONS", { regions: [] }), EMPTY_RESULT_FRESH_MS);
         assert.equal(getFreshMs("LEAGUE_REGIONS", { regions: [1] }), 7 * DAY);
         assert.equal(getFreshMs("LEAGUE_CLASSES", { classes: [] }), EMPTY_RESULT_FRESH_MS);
@@ -211,6 +211,24 @@ describe("freshness by schedule", () => {
             getFreshMs("LEAGUE_SCHEDULE", { data: { meetings: [] } }, { now }),
             EMPTY_RESULT_FRESH_MS
         );
+    });
+});
+
+describe("refreshable kinds", () => {
+    it("allows an early refetch for a relay max age only for schedule, table and balance data", () => {
+        const refreshable = Object.entries(DATA_POLICIES)
+            .filter(([, policy]) => (policy as { refreshable?: boolean }).refreshable === true)
+            .map(([kind]) => kind)
+            .sort();
+
+        assert.deepEqual(refreshable, [
+            "CLUB_PLAYERS",
+            "CLUB_SCHEDULE",
+            "LEAGUE_SCHEDULE",
+            "LEAGUE_TABLE",
+            "TEAM_BALANCES",
+            "TEAM_SCHEDULE"
+        ]);
     });
 });
 

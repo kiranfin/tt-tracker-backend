@@ -11,7 +11,8 @@ import {
     createResetToken,
     InvalidResetTokenError
 } from "../passwordResetStore.js";
-import { sendPasswordResetEmail } from "../mailer.js";
+import { describeMailError, type MailError, sendPasswordResetEmail } from "../mailer.js";
+import { writeJsonLog } from "../fileLogger.js";
 import { allowPasswordResetRequest } from "../passwordResetRateLimit.js";
 import { getRequiredAppUserId } from "../appUser.js";
 import { handleApiError } from "../utils/errors.js";
@@ -39,6 +40,18 @@ const GENERIC_RESET_RESPONSE = {
     }
 };
 
+// The caller always gets the generic answer. The log (operators only) says what really happened, without the
+// address, so a missing mail can be traced: no account for that address, rate limit or a failing SMTP login.
+async function logResetOutcome(
+    outcome: "sent" | "no_user" | "rate_limited" | "mail_failed",
+    mailError?: MailError
+) {
+    await writeJsonLog("password_reset_request", {
+        outcome,
+        ...(mailError ? { mailError } : {})
+    });
+}
+
 export async function passwordResetRoutes(app: FastifyInstance) {
     app.post("/api/auth/request-password-reset", async (request, reply) => {
         try {
@@ -46,21 +59,27 @@ export async function passwordResetRoutes(app: FastifyInstance) {
             const email = body.email.trim().toLowerCase();
 
             if (!allowPasswordResetRequest(email)) {
+                await logResetOutcome("rate_limited");
                 return GENERIC_RESET_RESPONSE;
             }
 
             const user = await findAppUserByEmail(email);
 
-            if (user?.email) {
-                const rawToken = await createResetToken(user.id);
+            if (!user?.email) {
+                await logResetOutcome("no_user");
+                return GENERIC_RESET_RESPONSE;
+            }
 
-                try {
-                    await sendPasswordResetEmail(user.email, rawToken);
-                } catch (mailError) {
-                    // Never surface mail/config failures to the caller — that
-                    // would leak whether the email exists. Log for operators.
-                    request.log.error(mailError);
-                }
+            const rawToken = await createResetToken(user.id);
+
+            try {
+                await sendPasswordResetEmail(user.email, rawToken);
+                await logResetOutcome("sent");
+            } catch (mailError) {
+                // Never surface mail/config failures to the caller — that
+                // would leak whether the email exists. Log for operators.
+                request.log.error(mailError);
+                await logResetOutcome("mail_failed", describeMailError(mailError));
             }
 
             return GENERIC_RESET_RESPONSE;

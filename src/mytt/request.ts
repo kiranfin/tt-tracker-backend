@@ -44,6 +44,8 @@ function buildHeaders(params: {
 }) {
     const headers: Record<string, string> = {
         accept: "application/json",
+        "user-agent": config.upstream.userAgent,
+        "accept-language": "de-DE,de;q=0.9,en;q=0.7",
         ...(params.method === "POST"
             ? { "content-type": "application/x-www-form-urlencoded" }
             : {}),

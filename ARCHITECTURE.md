@@ -104,4 +104,65 @@ Everything that reaches myTT goes through `upstream/fetch.ts`:
   exactly one probe request goes out, every new challenge doubles the pause up to 24 hours
 - the canary runs at most daily and is skipped during a challenge, with an open breaker or a tight budget
 - `/debug/status` shows breaker state, queue, budget, cache, store, background jobs and the challenge state. Under `data` it breaks the cache and the budget down per data kind: entries, fresh and stale count, age, the next refresh and how many upstream requests the kind caused in the last 30 minutes (interactive and background). `services/read.ts` tags every load with its kind (`upstream/dataKind.ts`) for that
+- `/debug/status` also shows `relay` (served, misses, accepted, rejected and duplicate uploads, inbox entries, tickets)
 - the request log (`logs/requests.jsonl`) rotates at 20 MB, three old files are kept
+
+## Device relay
+
+myTT blocks a shared server IP quickly (quota per IP, captcha on `/verify`). With the relay a cache miss is
+fetched by the **phone** (its own IP, its own quota) instead of the server. The backend stays the only place
+that knows URLs, parses, validates and caches. No route, service or `mytt/` function knows about the relay:
+the swap happens in `upstream/fetch.ts` (`fetchUpstreamText` calls `tryRelay` before the queue).
+
+```
+App  --GET /api/... (x-tt-relay: 1)-->  Backend
+     <-- 409 RELAY_REQUIRED { relay: { requests } }      (no old value)
+     <-- 200 { data (stale), meta, relay: { requests } } (old value exists)
+App  --fetch(request.url)-->  myTT          (credentials omitted, no cookie)
+App  --POST /api/relay { responses }-->  Backend (inbox, 2 min)
+App  --GET /api/... (x-tt-relay: 1)-->  Backend: the load runs again and reads the answer from the inbox,
+                                        then zod + `sources/validate.ts` + cache as always -> 200
+```
+
+- **Opt in per request** with the header `x-tt-relay: 1` (`RELAY_ENABLED`, default on). Old app versions send no
+  header and behave as before. `RELAY_ENABLED=false` restores the old behaviour at once.
+- **Server stays the fallback.** If the phone is throttled itself or the relay fails, the app asks again without
+  the header and the server fetches with its own budget.
+- **Multi-step loads** (club info = 2 requests, Andro ranking = several) work in several rounds: each round
+  reports the next missing requests.
+- `upstream/relay.ts` holds *tickets* (requests reported to one uploader) and the *inbox* (uploaded answers,
+  `RELAY_INBOX_TTL_MS`, reading does not consume). The uploader is `user:<id>` or `ip:<ip>`.
+- `RelayRequiredError` (`skipRetryDelay`) is neither an outage nor a reason for the HTML fallback. The cache
+  serves the old value as `stale` without a `retryAt`, so the next try loads again at once.
+  `readByPolicy` also turns a load that swallowed a missing answer into `RelayRequiredError`, so no incomplete
+  value is cached, and loads with relay run without stale-while-revalidate.
+- Relay answers skip the queue, budget and breakers (no server traffic). `meta.origin` is `relay`.
+- Stays on the server: background work (`runInBackground`: Andro candidate search, canary) and every request
+  with a cookie (old server cookie routes).
+- **Every request to `www.mytischtennis.de` counts against the quota** (measured, 2026-11-16), including the
+  `/api/ttr/*` JSON endpoints, `?_data=` loaders and HTML pages. Only calls to this backend and the logo images
+  (`ttde-portal.liga.nu`) are free.
+- **Club logos** (`GET /api/clubs/logos`): without a relay context the missing heads are scheduled as background
+  jobs as before. With a relay context no server job runs (jobs bypass the relay and cost the server IP 10 to 12
+  requests for a new league). Instead the call reads at most `RELAY_LOGO_HEADS_PER_CALL` (default 3, `0` = off)
+  missing heads in `refs` order through the relay. The order is stable, so after the upload the same first clubs
+  are served from the inbox and no new misses appear. The app asks again for the rest after its own retry delay.
+- **Maximum age** (`x-tt-max-age`, seconds): the home screen wants data that is at most 5 minutes old, while the
+  cache keeps schedules for up to 12 hours. The header is read only inside the relay branch of the `onRequest`
+  hook and clamped to at least `RELAY_MIN_MAX_AGE_MS` (default 5 minutes), so one entry is refetched at most that
+  often across all users. `readByPolicy` passes it to `readThrough` (`maxAgeMs`) only if the request runs through
+  the relay **and** the policy is `refreshable` (club schedule, club players, league table and schedule, team
+  schedule and balances). Without a relay the header is ignored: the server IP never pays for it. A too old
+  entry is reloaded at once (no stale-while-revalidate in relay mode); if the phone's answer is not in the inbox
+  yet, the old value comes back as `stale` together with `relay.requests`.
+
+### Security rules
+
+- Uploads are accepted only for requests the backend reported to **this uploader** in the last 2 minutes (ticket).
+  There is no free write access to the cache.
+- Every answer runs through the same zod schemas and plausibility checks as a server answer.
+- Rejected: status 429 or outside 200 to 599, bodies over `RELAY_MAX_BODY_BYTES`, a `finalUrl` on another origin
+  or on `/verify`. Uploads are limited per uploader (`RELAY_UPLOADS_PER_30MIN`) and logged as `mytt_relay_upload`.
+- Residual risk: a manipulated client can upload fake but well-formed data for a request reported to it.
+  Mitigation: `RELAY_REQUIRE_AUTH=true` limits uploads to logged-in users, and `meta.origin: "relay"` makes the
+  origin visible. The captcha is never solved, no browser fingerprint is faked.

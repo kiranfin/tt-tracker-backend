@@ -27,7 +27,15 @@ export type ReadThroughParams<T> = {
     swr?: boolean;
     // Load für die Aktualisierung im Hintergrund, z.B. mit Hintergrund Priorität. Standard ist `load`.
     refreshLoad?: () => Promise<T>;
+    // Ein Eintrag, der älter ist, gilt nicht als frisch (auch wenn seine TTL noch läuft). Er bleibt als
+    // Notnagel erhalten, falls der Load nicht klappt.
+    maxAgeMs?: number;
 };
+
+/** Fehler, die keine Quelle als kaputt markieren sollen (duck typed, damit cache nichts aus upstream importiert). */
+function hasSkipRetryDelay(error: unknown): boolean {
+    return (error as { skipRetryDelay?: unknown } | null)?.skipRetryDelay === true;
+}
 
 type LoadedValue = {
     value: unknown;
@@ -103,7 +111,9 @@ export class ResilientCache {
         const now = this.now();
         const entry = this.entries.get(key);
 
-        if (entry && now <= entry.expiresAt) {
+        const tooOld = params.maxAgeMs !== undefined && entry !== undefined && now - entry.fetchedAt > params.maxAgeMs;
+
+        if (entry && now <= entry.expiresAt && !tooOld) {
             this.counters.hits += 1;
             return this.toResult<T>(entry.value, "cache", entry.origin, entry.fetchedAt);
         }
@@ -127,12 +137,22 @@ export class ResilientCache {
             const loaded = await this.loadShared(params);
             return this.toResult<T>(loaded.value, loaded.origin, loaded.origin, loaded.fetchedAt);
         } catch (error) {
-            this.counters.loadFailures += 1;
+            const skipRetryDelay = hasSkipRetryDelay(error);
+
+            if (!skipRetryDelay) {
+                this.counters.loadFailures += 1;
+            }
 
             const fallback = this.entries.get(key);
 
             if (!fallback || !this.isUsableStale(fallback)) {
                 throw error;
+            }
+
+            // Kein Ausfall der Quelle (z.B. Device Relay wartet auf das Handy): alten Stand zeigen,
+            // aber keine Pause, damit der nächste Versuch sofort wieder laden darf.
+            if (skipRetryDelay) {
+                return this.toResult<T>(fallback.value, "stale", fallback.origin, fallback.fetchedAt);
             }
 
             fallback.retryAt = this.now() + this.options.failedLoadRetryMs;
@@ -209,6 +229,10 @@ export class ResilientCache {
         this.counters.refreshes += 1;
 
         this.loadShared({ ...params, load: params.refreshLoad ?? params.load }).catch((error) => {
+            if (hasSkipRetryDelay(error)) {
+                return;
+            }
+
             this.counters.refreshFailures += 1;
 
             // Die kaputte Quelle bis zum nächsten Versuch schonen, der Notnagel bleibt erhalten.

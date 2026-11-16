@@ -1,5 +1,8 @@
-/** Woher ein frisch geladener Wert stammt. "html" heißt: JSON API ausgefallen, Webseite eingesprungen. */
-export type LoadOrigin = "upstream" | "html";
+/**
+ * Woher ein frisch geladener Wert stammt. "html" heißt: JSON API ausgefallen, Webseite eingesprungen.
+ * "relay" heißt: das Handy hat die Rohdaten bei myTischtennis geholt und hochgeladen.
+ */
+export type LoadOrigin = "upstream" | "html" | "relay";
 
 /** Woher eine Antwort kam. "stale" ist ein abgelaufener Eintrag, der einen Fehler abfängt. */
 export type CacheSource = "cache" | LoadOrigin | "stale";
