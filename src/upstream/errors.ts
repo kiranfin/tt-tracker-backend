@@ -27,6 +27,27 @@ export class UpstreamChallengeError extends Error {
     }
 }
 
+/**
+ * Device Relay: Die Antwort von myTischtennis fehlt noch, die App muss sie holen und hochladen.
+ * Kein Ausfall von myTischtennis, deshalb kein Retry Delay und keine Fehlerzählung im Cache.
+ */
+export class RelayRequiredError extends Error {
+    readonly skipRetryDelay = true;
+
+    constructor() {
+        super("The device must fetch this data from myTischtennis");
+        this.name = "RelayRequiredError";
+    }
+}
+
+/** Ein Gerät lädt zu viele Relay Antworten hoch. */
+export class RelayThrottledError extends Error {
+    constructor() {
+        super("Too many relay uploads from this device");
+        this.name = "RelayThrottledError";
+    }
+}
+
 /** myTischtennis hat geantwortet, aber die Daten passen nicht mehr zum erwarteten Format. */
 export class UpstreamFormatError extends Error {
     constructor(

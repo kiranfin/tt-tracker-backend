@@ -36,6 +36,11 @@ const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
+const DEFAULT_USER_AGENT =
+    process.env.MYTT_USER_AGENT?.trim() ||
+    process.env.MYTT_HTML_USER_AGENT?.trim() ||
+    "Mozilla/5.0 (compatible; TischtennisTracker/1.0)";
+
 /**
  * Alle Einstellungen für myTischtennis und Cache, einmal beim Start gelesen.
  * `dotenv/config` muss vorher geladen sein (erster Import in server.ts).
@@ -55,12 +60,12 @@ export const config = {
         forceChallenge:
             process.env.NODE_ENV !== "production" &&
             readBoolean("MYTT_FORCE_CHALLENGE", false),
+        // Ehrlicher User Agent für alle Requests an myTischtennis (JSON und HTML), eine Quelle.
+        userAgent: DEFAULT_USER_AGENT,
         html: {
             timeoutMs: readNumber("MYTT_HTML_TIMEOUT_MS", 5 * SECOND_MS, 1),
             maxBytes: readNumber("MYTT_HTML_MAX_BYTES", 1_500_000, 1),
-            userAgent:
-                process.env.MYTT_HTML_USER_AGENT ??
-                "Mozilla/5.0 (compatible; TischtennisTracker/1.0)"
+            userAgent: DEFAULT_USER_AGENT
         }
     },
 
@@ -101,6 +106,20 @@ export const config = {
     challenge: {
         baseBackoffMs: readNumber("MYTT_CHALLENGE_PAUSE_MS", 6 * HOUR_MS, 1),
         maxBackoffMs: readNumber("MYTT_CHALLENGE_MAX_PAUSE_MS", 24 * HOUR_MS, 1)
+    },
+
+    // Device Relay: Bei einem Cache Miss holt das Handy die Rohdaten bei myTischtennis und lädt sie hoch.
+    // Das Backend kennt weiter allein die URLs, parst, validiert und cacht.
+    relay: {
+        enabled: readBoolean("RELAY_ENABLED", true),
+        // true: nur eingeloggte App Nutzer dürfen hochladen. false: anonyme Geräte zählen über ihre IP.
+        requireAuth: readBoolean("RELAY_REQUIRE_AUTH", false),
+        inboxTtlMs: readNumber("RELAY_INBOX_TTL_MS", 2 * MINUTE_MS, 1),
+        maxBodyBytes: readNumber("RELAY_MAX_BODY_BYTES", 1_500_000, 1),
+        maxResponsesPerUpload: 8,
+        // Inbox und Tickets zusammen.
+        maxEntries: 300,
+        uploadsPer30Min: Math.floor(readNumber("RELAY_UPLOADS_PER_30MIN", 240, 1))
     },
 
     features: {

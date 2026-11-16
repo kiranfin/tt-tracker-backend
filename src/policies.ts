@@ -138,7 +138,7 @@ export const DATA_POLICIES = {
     PLAYER_CLUB: policy<unknown>(12 * HOUR, { isEmpty: (club) => club === null }),
 
     // Vereine
-    CLUB_TEAMS: policy<unknown>(HOUR),
+    CLUB_TEAMS: policy<unknown>(12 * HOUR),
     // Adressen, Spiellokale und Vorstand ändern sich selten.
     CLUB_INFO: policy<unknown>(12 * HOUR),
     // Vereinslogos (Layout Loader), ändern sich fast nie.
@@ -147,7 +147,7 @@ export const DATA_POLICIES = {
         schedule: { max: 12 * HOUR, dates: clubScheduleDates },
         isEmpty: isEmptyClubSchedule
     }),
-    CLUB_PLAYERS: policy<ClubPlayersResponse>(HOUR, {
+    CLUB_PLAYERS: policy<ClubPlayersResponse>(6 * HOUR, {
         isEmpty: (list) => list.data.length === 0
     }),
     // Aufgelöste Andro Vereinsnummer (click-TT Nummer zu Andro Nummer).
@@ -171,9 +171,9 @@ export const DATA_POLICIES = {
     }),
 
     // Mannschaften
-    TEAM_PLAYERS: policy<unknown>(10 * MINUTE),
-    TEAM_SIMPLE_SCHEDULE: policy<unknown>(5 * MINUTE),
-    TEAM_INFOS: policy<unknown>(15 * MINUTE),
+    TEAM_PLAYERS: policy<unknown>(6 * HOUR),
+    TEAM_SIMPLE_SCHEDULE: policy<unknown>(HOUR),
+    TEAM_INFOS: policy<unknown>(12 * HOUR),
     TEAM_SCHEDULE: policy<TeamScheduleResponse>(5 * MINUTE, {
         schedule: { max: DAY, dates: teamScheduleDates },
         isEmpty: isEmptyTeamSchedule

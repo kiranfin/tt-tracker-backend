@@ -5,7 +5,8 @@ export function buildMeta(
     extra?: Record<string, unknown>
 ) {
     return {
-        source: result.source,
+        // "relay" ist nur eine Herkunft (origin): für die App ist ein frisch geladener Wert weiter "upstream".
+        source: result.source === "relay" ? "upstream" : result.source,
         origin: result.origin,
         fetchedAt: result.fetchedAt,
         ...extra

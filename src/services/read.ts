@@ -1,8 +1,15 @@
-import { peekUsableCached, readThrough, type ReadThroughResult } from "../cache/index.js";
+import {
+    markLoadOrigin,
+    peekUsableCached,
+    readThrough,
+    type ReadThroughResult
+} from "../cache/index.js";
 import { DATA_POLICIES, getFreshMs, type DataKind, type FreshContext } from "../policies.js";
 import { getMatchWindow, type MatchWindow } from "../sources/scheduleDates.js";
 import { runWithDataKind } from "../upstream/dataKind.js";
+import { RelayRequiredError } from "../upstream/errors.js";
 import { runInBackground } from "../upstream/priority.js";
+import { getRelayState } from "../upstream/relay.js";
 import { buildMeta } from "../utils/responseMeta.js";
 
 /** Das `meta` Objekt jeder Antwort: Herkunft und Alter der Daten, je nach Datenart mit Zusatzfeldern. */
@@ -35,16 +42,64 @@ export async function readByPolicy<T>(params: {
     freshContext?: () => FreshContext;
 }): Promise<ServiceResult<T>> {
     const policy = DATA_POLICIES[params.kind];
-    const load = () => runWithDataKind(params.kind, params.load);
+    const kindLoad = () => runWithDataKind(params.kind, params.load);
+    const isBackground = policy.priority === "background";
 
-    const result = await readThrough({
-        key: params.key,
-        ttlMs: (value: T) => getFreshMs(params.kind, value, params.freshContext?.()),
-        staleMaxMs: policy.staleMax,
-        swr: policy.swr,
-        load: policy.priority === "background" ? () => runInBackground(load) : load,
-        refreshLoad: () => runInBackground(load)
-    });
+    // Device Relay gilt nur für Loads, auf die ein Nutzer wartet.
+    const relay = isBackground ? undefined : getRelayState();
+
+    // Ob der Load dieses Aufrufs selbst lief (und nicht an einen fremden In-flight Load gehängt wurde).
+    let ownLoadRan = false;
+
+    const load = async () => {
+        ownLoadRan = true;
+
+        if (!relay) {
+            return kindLoad();
+        }
+
+        const missesBefore = relay.misses.length;
+        const servedBefore = relay.served;
+        const value = await kindLoad();
+
+        // Mancher Load schluckt Teilfehler (z.B. fehlende Vereinsdaten). Ein unvollständiger Wert
+        // darf nicht gecacht werden, solange noch Antworten vom Handy fehlen.
+        if (relay.misses.length > missesBefore) {
+            throw new RelayRequiredError();
+        }
+
+        if (relay.served > servedBefore) {
+            markLoadOrigin("relay");
+        }
+
+        return value;
+    };
+
+    const read = () =>
+        readThrough({
+            key: params.key,
+            ttlMs: (value: T) => getFreshMs(params.kind, value, params.freshContext?.()),
+            staleMaxMs: policy.staleMax,
+            // Mit Relay soll ein abgelaufener Eintrag den Load sofort versuchen, damit hochgeladene
+            // Antworten gleich verarbeitet werden. Fehlt eine, kommt der alte Stand als "stale".
+            swr: relay ? false : policy.swr,
+            load: isBackground ? () => runInBackground(load) : load,
+            refreshLoad: () => runInBackground(kindLoad)
+        });
+
+    let result: ReadThroughResult<T>;
+
+    try {
+        result = await read();
+    } catch (error) {
+        // Wir hingen an einem laufenden Load eines anderen Requests (anderer Relay Kontext oder keiner):
+        // dessen RelayRequiredError gilt nicht für uns. Genau einmal selbst laden.
+        if (error instanceof RelayRequiredError && !ownLoadRan) {
+            result = await read();
+        } else {
+            throw error;
+        }
+    }
 
     return toServiceResult(result, params.extraMeta?.(result.value));
 }
