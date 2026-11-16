@@ -191,6 +191,28 @@ describe("device relay in fetchUpstreamText", () => {
         assert.equal(getRelayStatus().uploadsRejected, 1);
     });
 
+    it("accepts a duplicate upload for a miss two requests reported, without overwriting", async () => {
+        const request = upstreamRequest("/rankings/andro-rangliste", { clubnr: "08065" });
+        // Zwei Requests desselben Geräts melden denselben Miss, beide laden die Antwort hoch.
+        const id = await reportMiss(relayState(), request);
+        await reportMiss(relayState(), request);
+
+        const finalUrl = request.url.toString();
+
+        assert.equal(storeRelayResponses(UPLOADER, [upload(id, { body: '{"first":1}', finalUrl })]), 1);
+        assert.equal(storeRelayResponses(UPLOADER, [upload(id, { body: '{"second":2}', finalUrl })]), 1);
+        assert.equal(getRelayStatus().uploadsDuplicate, 1);
+        assert.equal(getRelayStatus().uploadsRejected, 0);
+
+        const result = await requestContext.run(context(relayState()), () => fetchUpstreamText(request));
+
+        assert.equal(result.bodyText, '{"first":1}', "the ticketed upload wins");
+        assert.equal(realFetchCalls, 0);
+
+        // Ein anderer Uploader darf die Lücke nicht nutzen.
+        assert.equal(storeRelayResponses("ip:10.9.9.9", [upload(id, { finalUrl })]), 0);
+    });
+
     it("rejects 429, verify redirects, other origins, huge bodies and impossible statuses", async () => {
         const request = upstreamRequest("/api/x");
         const relay = relayState();

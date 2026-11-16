@@ -22,7 +22,7 @@ const tickets = new Map<string, number>();
 const inbox = new Map<string, { response: StoredRelayResponse; expiresAt: number }>();
 const uploadsByUploader = new Map<string, number[]>();
 
-const counters = { served: 0, misses: 0, uploadsAccepted: 0, uploadsRejected: 0 };
+const counters = { served: 0, misses: 0, uploadsAccepted: 0, uploadsRejected: 0, uploadsDuplicate: 0 };
 
 function entryKey(uploader: string, id: string) {
     return `${uploader}|${id}`;
@@ -207,6 +207,25 @@ export function storeRelayResponses(uploader: string, responses: RelayResponse[]
 
     for (const response of responses) {
         const key = entryKey(uploader, response.id);
+
+        // Zwei Requests desselben Geräts haben denselben Miss gemeldet, der erste Upload hat das Ticket schon
+        // verbraucht. Die Antwort liegt bereits in der Inbox: als angenommen zählen, aber nichts überschreiben.
+        // Sonst fiele der zweite Request auf den Server zurück und die Server IP zahlte doch.
+        if (!tickets.has(key) && inbox.has(key)) {
+            void writeJsonLog("mytt_relay_upload", {
+                uploader,
+                id: response.id,
+                status: response.status,
+                bytes: Buffer.byteLength(response.body, "utf8"),
+                accepted: true,
+                reason: "duplicate"
+            });
+
+            counters.uploadsDuplicate += 1;
+            accepted += 1;
+            continue;
+        }
+
         const reason = tickets.has(key) ? rejectReason(response) : "no_ticket";
 
         void writeJsonLog("mytt_relay_upload", {
@@ -287,4 +306,5 @@ export function resetRelayForTests() {
     counters.misses = 0;
     counters.uploadsAccepted = 0;
     counters.uploadsRejected = 0;
+    counters.uploadsDuplicate = 0;
 }
