@@ -214,6 +214,24 @@ describe("freshness by schedule", () => {
     });
 });
 
+describe("refreshable kinds", () => {
+    it("allows an early refetch for a relay max age only for schedule, table and balance data", () => {
+        const refreshable = Object.entries(DATA_POLICIES)
+            .filter(([, policy]) => (policy as { refreshable?: boolean }).refreshable === true)
+            .map(([kind]) => kind)
+            .sort();
+
+        assert.deepEqual(refreshable, [
+            "CLUB_PLAYERS",
+            "CLUB_SCHEDULE",
+            "LEAGUE_SCHEDULE",
+            "LEAGUE_TABLE",
+            "TEAM_BALANCES",
+            "TEAM_SCHEDULE"
+        ]);
+    });
+});
+
 describe("stale limits", () => {
     it("keeps long lived entries usable for at least twice their freshness", () => {
         assert.ok(DATA_POLICIES.CLUB_HEAD.staleMax >= 60 * DAY);

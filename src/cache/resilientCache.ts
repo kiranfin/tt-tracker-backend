@@ -27,6 +27,9 @@ export type ReadThroughParams<T> = {
     swr?: boolean;
     // Load für die Aktualisierung im Hintergrund, z.B. mit Hintergrund Priorität. Standard ist `load`.
     refreshLoad?: () => Promise<T>;
+    // Ein Eintrag, der älter ist, gilt nicht als frisch (auch wenn seine TTL noch läuft). Er bleibt als
+    // Notnagel erhalten, falls der Load nicht klappt.
+    maxAgeMs?: number;
 };
 
 /** Fehler, die keine Quelle als kaputt markieren sollen (duck typed, damit cache nichts aus upstream importiert). */
@@ -108,7 +111,9 @@ export class ResilientCache {
         const now = this.now();
         const entry = this.entries.get(key);
 
-        if (entry && now <= entry.expiresAt) {
+        const tooOld = params.maxAgeMs !== undefined && entry !== undefined && now - entry.fetchedAt > params.maxAgeMs;
+
+        if (entry && now <= entry.expiresAt && !tooOld) {
             this.counters.hits += 1;
             return this.toResult<T>(entry.value, "cache", entry.origin, entry.fetchedAt);
         }

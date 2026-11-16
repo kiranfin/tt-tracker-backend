@@ -6,6 +6,7 @@ import {
 } from "../cache/index.js";
 import { DATA_POLICIES, getFreshMs, type DataKind, type FreshContext } from "../policies.js";
 import { getMatchWindow, type MatchWindow } from "../sources/scheduleDates.js";
+import { getRequestContext } from "../requestContext.js";
 import { runWithDataKind } from "../upstream/dataKind.js";
 import { RelayRequiredError } from "../upstream/errors.js";
 import { runInBackground } from "../upstream/priority.js";
@@ -48,6 +49,10 @@ export async function readByPolicy<T>(params: {
     // Device Relay gilt nur für Loads, auf die ein Nutzer wartet.
     const relay = isBackground ? undefined : getRelayState();
 
+    // Höchstalter nur über das Relay und nur für Datenarten, die dafür vorgesehen sind: dann holt das Handy
+    // die Daten, die Server IP zahlt nie. Ohne Relay gilt allein die Frische aus der Policy.
+    const maxAgeMs = relay && policy.refreshable === true ? getRequestContext()?.maxAgeMs : undefined;
+
     // Ob der Load dieses Aufrufs selbst lief (und nicht an einen fremden In-flight Load gehängt wurde).
     let ownLoadRan = false;
 
@@ -83,6 +88,7 @@ export async function readByPolicy<T>(params: {
             // Mit Relay soll ein abgelaufener Eintrag den Load sofort versuchen, damit hochgeladene
             // Antworten gleich verarbeitet werden. Fehlt eine, kommt der alte Stand als "stale".
             swr: relay ? false : policy.swr,
+            maxAgeMs,
             load: isBackground ? () => runInBackground(load) : load,
             refreshLoad: () => runInBackground(kindLoad)
         });

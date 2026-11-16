@@ -10,6 +10,8 @@ export type RequestContext = {
     appUserId?: string | null;
     // Gesetzt, wenn die App den Header `x-tt-relay: 1` sendet (Device Relay).
     relay?: RelayContext;
+    // Höchstalter der Daten aus dem Header `x-tt-max-age`. Nur im Relay Zweig gesetzt, nie für den Server selbst.
+    maxAgeMs?: number;
 };
 
 export const requestContext = new AsyncLocalStorage<RequestContext>();

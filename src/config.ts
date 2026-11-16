@@ -119,7 +119,12 @@ export const config = {
         maxResponsesPerUpload: 8,
         // Inbox und Tickets zusammen.
         maxEntries: 300,
-        uploadsPer30Min: Math.floor(readNumber("RELAY_UPLOADS_PER_30MIN", 240, 1))
+        uploadsPer30Min: Math.floor(readNumber("RELAY_UPLOADS_PER_30MIN", 240, 1)),
+        // So viele Vereinsköpfe (Logos) holt ein Abruf von /api/clubs/logos über das Handy. 0 schaltet es ab.
+        logoHeadsPerCall: Math.floor(readNumber("RELAY_LOGO_HEADS_PER_CALL", 3)),
+        // Untere Grenze für das Höchstalter, das die App mit x-tt-max-age verlangen darf. So wird derselbe
+        // Eintrag über alle Nutzer hinweg höchstens so oft neu geholt.
+        minMaxAgeMs: readNumber("RELAY_MIN_MAX_AGE_MS", 5 * MINUTE_MS, 1)
     },
 
     features: {

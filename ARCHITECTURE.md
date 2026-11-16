@@ -137,8 +137,24 @@ App  --GET /api/... (x-tt-relay: 1)-->  Backend: the load runs again and reads t
   `readByPolicy` also turns a load that swallowed a missing answer into `RelayRequiredError`, so no incomplete
   value is cached, and loads with relay run without stale-while-revalidate.
 - Relay answers skip the queue, budget and breakers (no server traffic). `meta.origin` is `relay`.
-- Stays on the server: background work (`runInBackground`: logos, Andro candidate search, canary) and every
-  request with a cookie (old server cookie routes).
+- Stays on the server: background work (`runInBackground`: Andro candidate search, canary) and every request
+  with a cookie (old server cookie routes).
+- **Every request to `www.mytischtennis.de` counts against the quota** (measured, 2026-11-16), including the
+  `/api/ttr/*` JSON endpoints, `?_data=` loaders and HTML pages. Only calls to this backend and the logo images
+  (`ttde-portal.liga.nu`) are free.
+- **Club logos** (`GET /api/clubs/logos`): without a relay context the missing heads are scheduled as background
+  jobs as before. With a relay context no server job runs (jobs bypass the relay and cost the server IP 10 to 12
+  requests for a new league). Instead the call reads at most `RELAY_LOGO_HEADS_PER_CALL` (default 3, `0` = off)
+  missing heads in `refs` order through the relay. The order is stable, so after the upload the same first clubs
+  are served from the inbox and no new misses appear. The app asks again for the rest after its own retry delay.
+- **Maximum age** (`x-tt-max-age`, seconds): the home screen wants data that is at most 5 minutes old, while the
+  cache keeps schedules for up to 12 hours. The header is read only inside the relay branch of the `onRequest`
+  hook and clamped to at least `RELAY_MIN_MAX_AGE_MS` (default 5 minutes), so one entry is refetched at most that
+  often across all users. `readByPolicy` passes it to `readThrough` (`maxAgeMs`) only if the request runs through
+  the relay **and** the policy is `refreshable` (club schedule, club players, league table and schedule, team
+  schedule and balances). Without a relay the header is ignored: the server IP never pays for it. A too old
+  entry is reloaded at once (no stale-while-revalidate in relay mode); if the phone's answer is not in the inbox
+  yet, the old value comes back as `stale` together with `relay.requests`.
 
 ### Security rules
 

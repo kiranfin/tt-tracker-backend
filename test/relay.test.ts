@@ -6,6 +6,8 @@ import { config } from "../src/config.js";
 import { requestContext, type RequestContext } from "../src/requestContext.js";
 import type { RelayContext, RelayResponse } from "../src/relayTypes.js";
 import { fetchWithFallback } from "../src/sources/fetchWithFallback.js";
+import { getClubLogos } from "../src/services/club.js";
+import { whenBackgroundIdle } from "../src/services/jobs.js";
 import { getTeamPlayerList } from "../src/services/team.js";
 import { readByPolicy } from "../src/services/read.js";
 import { attachRelayRequests } from "../src/services/relay.js";
@@ -384,5 +386,126 @@ describe("relay helpers", () => {
         mock.method(Date, "now", () => later);
 
         assert.equal(allowRelayUpload("ip:limit", 1), true);
+    });
+});
+
+describe("club logos over the relay", () => {
+    const refs = [1, 2, 3, 4, 5].map((n) => `TTBW:900000${n}`);
+
+    function headUpload(miss: { id: string; url: string }, index: number) {
+        return upload(miss.id, {
+            body: JSON.stringify({
+                headData: { club_nr: `900000${index + 1}`, logo_id: `logo-${index + 1}`, club_name: `Club ${index + 1}` }
+            }),
+            finalUrl: miss.url
+        });
+    }
+
+    it("asks the phone for a capped number of heads, starts no server jobs, then serves them from the inbox", async () => {
+        const first = relayState();
+        const firstResult = await requestContext.run(context(first), () => getClubLogos(refs));
+
+        assert.equal(first.misses.length, config.relay.logoHeadsPerCall);
+        assert.deepEqual(firstResult.pending, refs);
+        assert.deepEqual(firstResult.logos, {});
+
+        await whenBackgroundIdle();
+
+        assert.equal(realFetchCalls, 0);
+
+        assert.equal(
+            storeRelayResponses(
+                UPLOADER,
+                first.misses.map((miss, index) => headUpload(miss, index))
+            ),
+            config.relay.logoHeadsPerCall
+        );
+
+        // Neuer Kontext desselben Uploaders: dieselben ersten Vereine werden aus der Inbox bedient.
+        const second = relayState();
+        const secondResult = await requestContext.run(context(second), () => getClubLogos(refs));
+
+        assert.equal(Object.keys(secondResult.logos).length, config.relay.logoHeadsPerCall);
+        assert.ok(secondResult.logos["TTBW:9000001"]?.includes("logo-1"));
+        assert.deepEqual(secondResult.pending, refs.slice(config.relay.logoHeadsPerCall));
+        assert.equal(second.misses.length, 0);
+
+        await whenBackgroundIdle();
+
+        assert.equal(realFetchCalls, 0);
+    });
+});
+
+describe("max age through readByPolicy", () => {
+    const loadMissing = async () => {
+        await fetchUpstreamText(upstreamRequest("/api/max-age"));
+
+        return { data: { meetings: [] } } as never;
+    };
+
+    function withMaxAge(relay: RelayContext | undefined, maxAgeMs: number): RequestContext {
+        return { ...context(relay), maxAgeMs };
+    }
+
+    async function putAged(key: string) {
+        putCached(key, { data: { meetings: ["old"] } }, 60_000);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    it("refetches an entry that is older than the max age and reports the miss", async () => {
+        const key = "max-age-old";
+
+        await putAged(key);
+
+        const relay = relayState();
+        const result = await requestContext.run(withMaxAge(relay, 5), () =>
+            readByPolicy({ kind: "CLUB_SCHEDULE", key, load: loadMissing })
+        );
+
+        assert.equal(result.meta.source, "stale");
+        assert.deepEqual(result.value, { data: { meetings: ["old"] } });
+        assert.equal(relay.misses.length, 1);
+        assert.equal(realFetchCalls, 0);
+    });
+
+    it("serves an entry that is younger than the max age from the cache", async () => {
+        const key = "max-age-young";
+
+        await putAged(key);
+
+        const relay = relayState();
+        const result = await requestContext.run(withMaxAge(relay, 120_000), () =>
+            readByPolicy({ kind: "CLUB_SCHEDULE", key, load: loadMissing })
+        );
+
+        assert.equal(result.meta.source, "cache");
+        assert.equal(relay.misses.length, 0);
+    });
+
+    it("ignores the max age without a relay, so the server IP never pays for it", async () => {
+        const key = "max-age-no-relay";
+
+        await putAged(key);
+
+        const result = await requestContext.run(withMaxAge(undefined, 5), () =>
+            readByPolicy({ kind: "CLUB_SCHEDULE", key, load: loadMissing })
+        );
+
+        assert.equal(result.meta.source, "cache");
+        assert.equal(realFetchCalls, 0);
+    });
+
+    it("ignores the max age for kinds that are not refreshable", async () => {
+        const key = "max-age-not-refreshable";
+
+        await putAged(key);
+
+        const relay = relayState();
+        const result = await requestContext.run(withMaxAge(relay, 5), () =>
+            readByPolicy({ kind: "CLUB_HEAD", key, load: loadMissing })
+        );
+
+        assert.equal(result.meta.source, "cache");
+        assert.equal(relay.misses.length, 0);
     });
 });

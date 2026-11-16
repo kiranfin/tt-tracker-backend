@@ -80,6 +80,8 @@ export type Policy<T> = {
     staleMax: number;
     swr: boolean;
     priority: Priority;
+    // May be refetched early when a relay request asks for a maximum age (x-tt-max-age).
+    refreshable?: boolean;
 };
 
 function policy<T>(
@@ -145,10 +147,12 @@ export const DATA_POLICIES = {
     CLUB_HEAD: policy<unknown>(30 * DAY),
     CLUB_SCHEDULE: policy<ClubScheduleResponse>(HOUR, {
         schedule: { max: 12 * HOUR, dates: clubScheduleDates },
-        isEmpty: isEmptyClubSchedule
+        isEmpty: isEmptyClubSchedule,
+        refreshable: true
     }),
     CLUB_PLAYERS: policy<ClubPlayersResponse>(6 * HOUR, {
-        isEmpty: (list) => list.data.length === 0
+        isEmpty: (list) => list.data.length === 0,
+        refreshable: true
     }),
     // Aufgelöste Andro Vereinsnummer (click-TT Nummer zu Andro Nummer).
     ANDRO_CLUB_NR: policy<string>(30 * DAY),
@@ -163,11 +167,13 @@ export const DATA_POLICIES = {
     // Die Tabelle enthält keine Termine, das Fenster kommt aus dem gecachten Liga Spielplan.
     LEAGUE_TABLE: policy<LeagueTableResponse>(15 * MINUTE, {
         schedule: { max: DAY },
-        isEmpty: isEmptyLeagueTable
+        isEmpty: isEmptyLeagueTable,
+        refreshable: true
     }),
     LEAGUE_SCHEDULE: policy<LeagueScheduleResponse>(HOUR, {
         schedule: { max: DAY, dates: leagueScheduleDates },
-        isEmpty: isEmptyLeagueSchedule
+        isEmpty: isEmptyLeagueSchedule,
+        refreshable: true
     }),
 
     // Mannschaften
@@ -176,12 +182,14 @@ export const DATA_POLICIES = {
     TEAM_INFOS: policy<unknown>(12 * HOUR),
     TEAM_SCHEDULE: policy<TeamScheduleResponse>(5 * MINUTE, {
         schedule: { max: DAY, dates: teamScheduleDates },
-        isEmpty: isEmptyTeamSchedule
+        isEmpty: isEmptyTeamSchedule,
+        refreshable: true
     }),
     // Bilanzen: das Fenster kommt aus dem gecachten Mannschaftsspielplan.
     TEAM_BALANCES: policy<TeamBalancesResponse>(5 * MINUTE, {
         schedule: { max: DAY },
-        isEmpty: isEmptyTeamBalances
+        isEmpty: isEmptyTeamBalances,
+        refreshable: true
     }),
 
     // Spielberichte: live, geplant und abgeschlossen haben verschiedene Laufzeiten.

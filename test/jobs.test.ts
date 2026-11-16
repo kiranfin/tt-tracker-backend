@@ -74,7 +74,7 @@ describe("background jobs", () => {
 });
 
 describe("club logos", () => {
-    it("answers from the cache only and lists the missing logos as pending", () => {
+    it("answers from the cache only and lists the missing logos as pending", async () => {
         resetBreakersForTests();
         // Eine Challenge verhindert, dass die Hintergrundjobs dieses Tests echte Abrufe starten.
         reportUpstreamResult({ lane: "api", challenge: true });
@@ -82,7 +82,7 @@ describe("club logos", () => {
         putCached(cacheKeys.clubHead("TTBW", "2055064"), { logoUrl: "https://logo/1" }, 60_000);
         putCached(cacheKeys.clubHead("TTBW", "2055099"), { logoUrl: null }, 60_000);
 
-        const result = getClubLogos(["TTBW:2055064", "TTBW:2055099", "WTTV:12201"]);
+        const result = await getClubLogos(["TTBW:2055064", "TTBW:2055099", "WTTV:12201"]);
 
         assert.deepEqual(result.logos, {
             "TTBW:2055064": "https://logo/1",

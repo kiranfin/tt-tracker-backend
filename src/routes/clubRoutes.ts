@@ -45,10 +45,16 @@ export async function clubRoutes(app: FastifyInstance) {
             );
         }
 
-        // Nur was im Cache liegt. Fehlende Logos lädt das Backend im Hintergrund nach.
-        const { logos, pending } = getClubLogos(refs);
+        // Nur was im Cache liegt. Fehlende Logos lädt das Backend im Hintergrund nach, mit Device Relay holt
+        // das Handy die ersten paar (siehe getClubLogos).
+        try {
+            const { logos, pending } = await getClubLogos(refs);
 
-        return { data: logos, meta: { pending } };
+            return { data: logos, meta: { pending } };
+        } catch (error) {
+            request.log.error(error);
+            return handleApiError(error, reply);
+        }
     });
 
     app.get("/api/clubs/:organization/:clubNumber/info", async (request, reply) => {

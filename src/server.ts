@@ -69,6 +69,15 @@ app.addHook("onRequest", (request, reply, done) => {
     // Device Relay: die App holt fehlende myTT Antworten selbst und lädt sie hoch.
     if (config.relay.enabled && request.headers["x-tt-relay"] === "1") {
         context.relay = { uploader: buildRelayUploader(null, request.ip), misses: [], served: 0 };
+
+        // Höchstalter: die App will z.B. auf der Startseite Daten, die höchstens 5 Minuten alt sind. Das gilt nur
+        // über das Relay, denn dann holt das Handy die Daten. Die Server IP zahlt nie dafür.
+        const rawMaxAge = request.headers["x-tt-max-age"];
+        const maxAgeSeconds = typeof rawMaxAge === "string" ? Number(rawMaxAge) : NaN;
+
+        if (Number.isFinite(maxAgeSeconds) && maxAgeSeconds > 0) {
+            context.maxAgeMs = Math.max(config.relay.minMaxAgeMs, maxAgeSeconds * 1000);
+        }
     }
 
     requestContext.run(context, () => {
@@ -139,6 +148,7 @@ app.addHook("preHandler", async (request, reply) => {
                 if (config.relay.requireAuth && !user) {
                     // Ohne Login kein Relay: der Request läuft klassisch über den Server.
                     context.relay = undefined;
+                    context.maxAgeMs = undefined;
                 } else {
                     context.relay.uploader = buildRelayUploader(user?.id, request.ip);
                 }
