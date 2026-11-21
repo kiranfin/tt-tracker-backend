@@ -31,6 +31,7 @@ The backend is responsible for:
 - Caching public data and refreshing it by match schedule, in the background (stale-while-revalidate)
 - Staying within a rolling request budget (`MYTT_BUDGET_PER_30MIN`) and pausing when myTischtennis blocks the server IP
 - Letting the app fetch cache misses from myTischtennis itself (**device relay**, `x-tt-relay: 1`, `POST /api/relay`), so the server IP sends almost no requests; the backend still builds the URLs, parses, validates and caches
+- Falling back to the myTischtennis website for some data (league table, schedules, match report) when the JSON API is down
 - Handling API errors in a controlled way, so the app can show the last known data with its age
 - Storing snapshots that users share with other app users (the phone fetches personal data, not the server)
 - Keeping sensitive backend configuration outside of the mobile app

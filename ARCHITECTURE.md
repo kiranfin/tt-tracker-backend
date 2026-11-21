@@ -90,6 +90,21 @@ for old app versions during the transition and are removed afterwards.
 4. **Service** in `services/` that calls `readByPolicy`, then a **route** in `routes/` that validates input,
    calls the service and sends the result. Errors go through `handleApiError`.
 
+## HTML twins of API data
+
+Some data has a second way to be read from the myTT website (`sources/html/`, `fetchWithFallback`). It is used only
+when the API fails (5xx, network error, breaker open because of an outage). Both ways share the same quota, so
+this adds resilience, not budget. 4xx, 429, challenges and relay requests never fall back.
+
+- **League table, league schedule, ...**: see `mytt/league.ts` (`getRouteDataWithHtmlFallback`).
+- **Match report (`getMeetingLive`)**: the page `.../gruppe/<id>/spielbericht/<meetingId>/<name>` embeds the same
+  report under `loaderData[<route id>].meetingReport` (the API wraps it as `data`). The loader ignores association,
+  season, league, group and name, only the meeting id counts, so `buildMeetingReportPagePath` uses placeholders and the
+  fallback needs no context. `meetingReportToApiResponse` maps it to `{ data }` so the existing schema applies.
+  `meta.origin` is `html`. A completed report from the page is stored like any other. Not verified: how up to date the
+  page is for a running match compared with the API. Fixture: `test/fixtures/meeting-report-loader.json`.
+- Test the fallback locally with `MYTT_FORCE_API_FAILURE=true` (never in production).
+
 ## Upstream protection
 
 Everything that reaches myTT goes through `upstream/fetch.ts`:
