@@ -1,9 +1,9 @@
 import { cacheKeys } from "../cacheKeys.js";
 import { findPlayerInClubList, normalizePlayerId, toPublicRating } from "../mytt/rating.js";
-import { searchClubs, searchPlayers } from "../mytt/search.js";
 import type { ClubPlayer } from "../schemas.js";
 import { getClubPlayerList } from "./club.js";
 import { readByPolicy, type ResponseMeta } from "./read.js";
+import { getClubSearch, getPlayerSearch } from "./search.js";
 
 export type PlayerClub = {
     organization: string;
@@ -28,7 +28,22 @@ function parseLicenceClub(value: string | null | undefined) {
 async function loadPlayerClub(nuid: string, name: string): Promise<PlayerClub | null> {
     const wanted = normalizePlayerId(nuid);
 
-    const players = await searchPlayers({ query: name, page: 1, pagesize: 20 });
+    // Über die Such Services: gemeinsamer Cache mit der App Suche und bei einer Störung die bekannten Treffer.
+    // Kommt die Antwort aus der Notfall Suche und reicht nicht, wird der Suchfehler geworfen statt null zu
+    // liefern, sonst läge ein falsches "kein Verein" für die ganze Frische im Cache.
+    let searchError: unknown;
+    const rememberError = (error: unknown) => {
+        searchError = error;
+    };
+    const notFound = () => {
+        if (searchError !== undefined) {
+            throw searchError;
+        }
+
+        return null;
+    };
+
+    const players = (await getPlayerSearch({ query: name, page: 1, pagesize: 20 }, rememberError)).value;
 
     const found = players.results.find(
         (player) => normalizePlayerId(player.internal_id) === wanted
@@ -37,13 +52,13 @@ async function loadPlayerClub(nuid: string, name: string): Promise<PlayerClub | 
     const licence = parseLicenceClub(found?.licence_club);
 
     if (!found || !licence) {
-        return null;
+        return notFound();
     }
 
     const clubName = found.club_name?.trim() || licence.name;
 
     // Die Spielersuche kennt nur die Vereinsnummer, der Verband steht in der Vereinssuche.
-    const clubs = await searchClubs({ query: clubName, page: 1, pagesize: 10 });
+    const clubs = (await getClubSearch({ query: clubName, page: 1, pagesize: 10 }, rememberError)).value;
 
     const club =
         clubs.results.find(
@@ -53,7 +68,7 @@ async function loadPlayerClub(nuid: string, name: string): Promise<PlayerClub | 
         ) ?? clubs.results.find((candidate) => candidate.clubnr === licence.clubNumber);
 
     if (!club?.organization_short) {
-        return null;
+        return notFound();
     }
 
     return {

@@ -5,6 +5,7 @@ import { fetchWithFallback } from "../src/sources/fetchWithFallback.js";
 import { RemixContextParseError } from "../src/sources/html/remixContext.js";
 import {
     LocalRateLimitError,
+    RelayRequiredError,
     UpstreamError,
     UpstreamFormatError,
     UpstreamRateLimitError
@@ -188,5 +189,22 @@ describe("fetchWithFallback", () => {
 
         assert.equal(value, "api");
         assert.equal(origin, "upstream");
+    });
+
+    it("passes a relay request of the fallback through instead of the API error", async () => {
+        const relayError = new RelayRequiredError();
+
+        await assert.rejects(
+            fetchWithFallback({
+                name: "test_relay_fallback",
+                primary: async () => {
+                    throw new UpstreamError("HTTP 503", 503);
+                },
+                fallback: async () => {
+                    throw relayError;
+                }
+            }),
+            (thrown: unknown) => thrown === relayError
+        );
     });
 });

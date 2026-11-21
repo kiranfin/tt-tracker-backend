@@ -2,7 +2,12 @@ import { config } from "../config.js";
 import { markLoadOrigin } from "../cache/index.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { getRequestContext } from "../requestContext.js";
-import { LocalRateLimitError, UpstreamError, UpstreamFormatError } from "../upstream/errors.js";
+import {
+    LocalRateLimitError,
+    RelayRequiredError,
+    UpstreamError,
+    UpstreamFormatError
+} from "../upstream/errors.js";
 import { trackSourceResult, type SourceKind } from "../upstream/tracker.js";
 import { RemixContextParseError } from "./html/remixContext.js";
 
@@ -65,7 +70,10 @@ async function runStep<T>(
 
         return value;
     } catch (error) {
-        logSource({ name, source, ok: false, error });
+        // Ein Relay Miss ist kein Fehler der Quelle, das Handy holt die Antwort erst noch.
+        if (!(error instanceof RelayRequiredError)) {
+            logSource({ name, source, ok: false, error });
+        }
 
         throw error;
     }
@@ -111,6 +119,12 @@ export async function fetchWithFallback<T>(params: {
 
             return value;
         } catch (fallbackError) {
+            // Device Relay: der Fallback wartet auf eine Antwort vom Handy. Das muss durchgehen, sonst bekommt
+            // die App kein RELAY_REQUIRED und der Server holt die Daten am Ende doch selbst.
+            if (fallbackError instanceof RelayRequiredError) {
+                throw fallbackError;
+            }
+
             // Den Fehler der API Seite werfen, den kennt handleApiError.
             throw primarySource === "api" ? primaryError : fallbackError;
         }

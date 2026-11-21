@@ -46,7 +46,10 @@ export const ClubTeamSchema = z.object({
     points_lost: StringOrNumberSchema.nullable().optional(),
     table_rank: StringOrNumberSchema.nullable().optional(),
     league_name: z.string().nullable().optional(),
-    team_organisation_short: z.string().nullable().optional()
+    team_organisation_short: z.string().nullable().optional(),
+    // Nur von der Vereinsseite (HTML Fallback): Nummer im Wettbewerb und Kürzel der Meldung ("Erwachsene", "J 19").
+    team_nr: StringOrNumberSchema.nullable().optional(),
+    contest_type: z.string().nullable().optional()
 });
 
 export const ClubTeamsResponseSchema = z.object({

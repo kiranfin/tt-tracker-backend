@@ -141,6 +141,9 @@ export const DATA_POLICIES = {
 
     // Vereine
     CLUB_TEAMS: policy<unknown>(12 * HOUR),
+    // Mannschaftsmeldung, nur Zwischenablage des HTML Fallbacks der Teamspieler. Kurz, damit eine frisch
+    // freigegebene Rückrunden Meldung oder Nachmeldung bald ankommt, lang genug für alle Teams eines Vereins.
+    CLUB_LINEUP: policy<unknown>(HOUR),
     // Adressen, Spiellokale und Vorstand ändern sich selten.
     CLUB_INFO: policy<unknown>(12 * HOUR),
     // Vereinslogos (Layout Loader), ändern sich fast nie.

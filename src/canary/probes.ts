@@ -9,6 +9,7 @@ import {
 } from "../sources/validate.js";
 import {
     ClubScheduleResponseSchema,
+    ClubTeamsResponseSchema,
     LeagueScheduleResponseSchema,
     TeamBalancesResponseSchema,
     TeamInfoResponseSchema,
@@ -20,7 +21,14 @@ import {
     buildAndroRankingSearchParams,
     getAndroEntriesCount
 } from "../mytt/androRanking.js";
-import { buildClubContextPath, CLUB_SCHEDULE_ROUTE_ID } from "../mytt/club.js";
+import {
+    buildClubContextPath,
+    buildClubLineupPath,
+    CLUB_LINEUP_ROUTE_ID,
+    CLUB_SCHEDULE_ROUTE_ID,
+    CLUB_TEAMS_ROUTE_ID
+} from "../mytt/club.js";
+import { clubTeamsPageToApiResponse, teamLineupToApiResponse } from "../sources/html/clubTeams.js";
 import {
     buildLeaguePagePath,
     LEAGUE_SCHEDULE_ROUTE_ID,
@@ -149,6 +157,48 @@ export const CANARY_PROBES: CanaryProbe[] = [
         routeId: CLUB_SCHEDULE_ROUTE_ID,
         check: (value, source) => {
             validateClubSchedule(parseUpstream(ClubScheduleResponseSchema, value, source), source);
+        }
+    },
+    // Fallback der Vereinsmannschaften: die Liste ist immer die aktuelle, egal welche Saison im Pfad steht.
+    {
+        name: "club_teams",
+        path: buildClubContextPath({ ...CLUB, clubSlug: "x", page: "mannschaften" }),
+        searchParams: dataParam(CLUB_TEAMS_ROUTE_ID),
+        routeId: CLUB_TEAMS_ROUTE_ID,
+        check: (value, source) => {
+            const teams = parseUpstream(
+                ClubTeamsResponseSchema,
+                clubTeamsPageToApiResponse(value as JsonRecord),
+                source
+            ).data;
+
+            if (teams.length === 0) {
+                throw new Error("club has no teams");
+            }
+
+            if (!teams.every((team) => team.team_id && team.team_nr != null && team.contest_type)) {
+                throw new Error("teams without team_id, team_nr or contest_type");
+            }
+        }
+    },
+    // Fallback der Teamspieler: Mannschaftsmeldung der alten Vorrunde.
+    {
+        name: "team_lineup",
+        path: buildClubLineupPath({
+            association: CLUB.association,
+            season: SEASON,
+            clubNumber: CLUB.clubNumber,
+            contestType: "Erwachsene",
+            half: "vr"
+        }),
+        searchParams: dataParam(CLUB_LINEUP_ROUTE_ID),
+        routeId: CLUB_LINEUP_ROUTE_ID,
+        check: (value) => {
+            const players = teamLineupToApiResponse(value as JsonRecord, 1).data;
+
+            if (players.length === 0 || !players.every((player) => player.internal_id && player.lastname)) {
+                throw new Error("lineup of team 1 is empty or incomplete");
+            }
         }
     },
     {

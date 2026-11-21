@@ -43,6 +43,15 @@ export const cacheKeys = {
         `club-info:${organization}:${clubNumber}:${season}`,
     clubTeams: (organization: string, clubNumber: string) =>
         `club-teams:${organization}:${clubNumber}`,
+    // Mannschaftsmeldung eines Wettbewerbs (nur HTML Fallback der Teamspieler).
+    clubLineup: (params: {
+        organization: string;
+        clubNumber: string;
+        season: string;
+        contestType: string;
+        half: string;
+    }) =>
+        `club-lineup:${params.organization}:${params.clubNumber}:${params.season}:${params.contestType}:${params.half}`,
     // Der Vereinsname gehört bewusst nicht in den Key (verschiedene Schreibweisen, ein Eintrag).
     clubPlayers: (organization: string, clubNumber: string, androClubNr?: string) =>
         [
@@ -124,6 +133,7 @@ const KIND_BY_PREFIX: Record<string, string> = {
     "club-head": "CLUB_HEAD",
     "club-info": "CLUB_INFO",
     "club-teams": "CLUB_TEAMS",
+    "club-lineup": "CLUB_LINEUP",
     "club-players-andro": "CLUB_PLAYERS",
     "club-schedule": "CLUB_SCHEDULE",
     "andro-club-nr": "ANDRO_CLUB_NR",

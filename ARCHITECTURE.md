@@ -103,6 +103,27 @@ this adds resilience, not budget. 4xx, 429, challenges and relay requests never 
   fallback needs no context. `meetingReportToApiResponse` maps it to `{ data }` so the existing schema applies.
   `meta.origin` is `html`. A completed report from the page is stored like any other. Not verified: how up to date the
   page is for a running match compared with the API. Fixture: `test/fixtures/meeting-report-loader.json`.
+- **Club teams (`getClubTeams`)**: the club page `.../verein/<clubNr>/x/mannschaften` has the same rows as
+  `/api/ttr/teams` under `data.teams_list.club_teams`, plus `team_nr` and `contest_type`. The list is always the
+  current one, whatever season is in the path. The loader also reads match dates from the NU feed and returns
+  `data: null` (PT500) when that feed fails, then the fallback fails too (`sources/html/clubTeams.ts`).
+- **Team players (`getTeamPlayers`)**: the route only knows the team id, the lineup lives at the club. The fallback
+  reads (1) the team info page with placeholders (only the team id counts) for club and association, (2) the club
+  teams for `team_nr` and `contest_type`, from the cache if it holds a list from the club page, else from the club
+  page (never the API, it is down), (3) the lineup `.../verein/<clubNr>/x/meldungendetails/<contest>/<vr|rr>`
+  filtered to the team and mapped to the API fields (`firstname`, `lastname`, `internal_id`, `rank`). From January
+  on, `rr` and `vr` load in parallel because the `rr` lineup stays empty until it is approved. The first half with
+  players wins, also when the other page failed. Empty and failed together is an error, not an empty list. With the
+  device relay this is at most four rounds, the app's limit, with no slack.
+- The club page list goes into the cache under the `CLUB_TEAMS` key (origin `html`, read even when expired), the
+  lineup under `CLUB_LINEUP` (one hour, fresh only). Both hold for every team of the club, so a second team of the
+  same club costs only API and team info. Without this, a club with eight teams cost 8 club pages and 8 to 16
+  lineups during an outage.
+- Not covered on purpose: search (falls back to `knownSearch`), personal TTR, TTR history and head-to-head (login
+  only, cached), simple team schedule (not used by the app).
+- A relay request of the fallback (`RelayRequiredError`) is passed through by `fetchWithFallback`, otherwise the
+  app would get the API error instead of `RELAY_REQUIRED` and the server would fetch the page itself. A relay miss
+  is not counted as a failed source in the source statistics.
 - Test the fallback locally with `MYTT_FORCE_API_FAILURE=true` (never in production).
 
 ## Upstream protection

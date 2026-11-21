@@ -5,38 +5,29 @@ import {
     ClubTeamsResponseSchema
 } from "../schemas.js";
 import type { ClubInfoContact, ClubScheduleResponse, ClubTeamsResponse } from "../schemas.js";
+import { fetchWithFallback } from "../sources/fetchWithFallback.js";
+import { clubTeamsPageToApiResponse } from "../sources/html/clubTeams.js";
+import { getRouteDataFromPage } from "../sources/html/pageRoute.js";
 import { validateClubSchedule } from "../sources/validate.js";
 import { UpstreamFormatError } from "../upstream/errors.js";
+import { parseUpstream } from "../upstream/parse.js";
+import { getCurrentSeasonSegment } from "../utils/season.js";
 import { getJsonFromMytt, getRouteDataWithHtmlFallback } from "./request.js";
-
-export async function getClubTeams(params: {
-    clubNumber: string;
-    organization: string;
-}): Promise<ClubTeamsResponse> {
-    const searchParams = new URLSearchParams({
-        clubNumber: params.clubNumber,
-        organization: params.organization
-    });
-
-    return getJsonFromMytt({
-        path: "/api/ttr/teams",
-        searchParams,
-        schema: ClubTeamsResponseSchema
-    });
-}
 
 const CLUB_ROUTE_PREFIX = "routes/click-tt+/$association+/$season+/verein.$clubid.$clubname+";
 
 export const CLUB_SCHEDULE_ROUTE_ID = `${CLUB_ROUTE_PREFIX}/spielplan`;
 export const CLUB_LAYOUT_ROUTE_ID = `${CLUB_ROUTE_PREFIX}/_layout`;
 export const CLUB_INFO_ROUTE_ID = `${CLUB_ROUTE_PREFIX}/info`;
+export const CLUB_TEAMS_ROUTE_ID = `${CLUB_ROUTE_PREFIX}/mannschaften`;
+export const CLUB_LINEUP_ROUTE_ID = `${CLUB_ROUTE_PREFIX}/meldungendetails.$team_short.$filter`;
 
 export function buildClubContextPath(params: {
     association: string;
     season: string;
     clubNumber: string;
     clubSlug?: string;
-    page: "spielplan" | "info";
+    page: "spielplan" | "info" | "mannschaften";
 }) {
     const clubSlug = params.clubSlug?.trim() || "x";
 
@@ -51,6 +42,73 @@ export function buildClubContextPath(params: {
     ];
 
     return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+}
+
+/** Mannschaftsmeldung eines Wettbewerbs ("Erwachsene", "J 19") für Vor- oder Rückrunde. */
+export function buildClubLineupPath(params: {
+    association: string;
+    season: string;
+    clubNumber: string;
+    contestType: string;
+    half: "vr" | "rr";
+}) {
+    const segments = [
+        "click-tt",
+        params.association,
+        params.season,
+        "verein",
+        params.clubNumber,
+        "x",
+        "meldungendetails",
+        params.contestType,
+        params.half
+    ];
+
+    return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+}
+
+/**
+ * Mannschaften des Vereins von der Vereinsseite. Die Liste ist immer die aktuelle, egal welche Saison im Pfad
+ * steht, deshalb die laufende Saison.
+ */
+export async function getClubTeamsFromPage(params: {
+    clubNumber: string;
+    organization: string;
+}): Promise<ClubTeamsResponse> {
+    const { routeData } = await getRouteDataFromPage({
+        path: buildClubContextPath({
+            association: params.organization,
+            season: getCurrentSeasonSegment(),
+            clubNumber: params.clubNumber,
+            page: "mannschaften"
+        }),
+        routeId: CLUB_TEAMS_ROUTE_ID
+    });
+
+    return parseUpstream(ClubTeamsResponseSchema, clubTeamsPageToApiResponse(routeData), "club_teams:html");
+}
+
+/** Mannschaften des Vereins: JSON API zuerst, bei einer API Störung die Vereinsseite `mannschaften`. */
+export async function getClubTeams(params: {
+    clubNumber: string;
+    organization: string;
+}): Promise<ClubTeamsResponse> {
+    const searchParams = new URLSearchParams({
+        clubNumber: params.clubNumber,
+        organization: params.organization
+    });
+
+    return fetchWithFallback({
+        name: "club_teams",
+        primary: () =>
+            getJsonFromMytt({
+                name: "club_teams",
+                path: "/api/ttr/teams",
+                searchParams,
+                schema: ClubTeamsResponseSchema
+            }),
+        fallback: () => getClubTeamsFromPage(params)
+    });
 }
 
 export async function getClubSchedule(params: {

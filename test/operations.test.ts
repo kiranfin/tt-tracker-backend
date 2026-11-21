@@ -76,6 +76,13 @@ describe("cache key kinds", () => {
             cacheKeys.clubHead("TTBW", "1"),
             cacheKeys.clubInfo("TTBW", "1", "26--27"),
             cacheKeys.clubTeams("TTBW", "1"),
+            cacheKeys.clubLineup({
+                organization: "TTBW",
+                clubNumber: "1",
+                season: "26--27",
+                contestType: "Erwachsene",
+                half: "vr"
+            }),
             cacheKeys.clubPlayers("TTBW", "1"),
             cacheKeys.clubSchedule({ organization: "TTBW", clubNumber: "1", season: "26--27", clubSlug: "x" }),
             cacheKeys.androClubNr("TTBW", "1"),

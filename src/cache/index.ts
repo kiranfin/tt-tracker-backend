@@ -2,7 +2,7 @@ import { config } from "../config.js";
 import { writeJsonLog } from "../fileLogger.js";
 import { loadCacheFromFile, saveCacheToFile } from "./persistence.js";
 import { ResilientCache, type ReadThroughParams } from "./resilientCache.js";
-import type { ReadThroughResult } from "./types.js";
+import type { LoadOrigin, ReadThroughResult } from "./types.js";
 
 export { markLoadOrigin } from "./loadOrigin.js";
 export type { CacheSource, ReadThroughResult } from "./types.js";
@@ -43,8 +43,14 @@ export function peekUsableCached<T>(key: string): T | undefined {
 }
 
 /** Legt einen Wert direkt ab (Merkzettel, die als Nebenprodukt eines Loads entstehen). */
-export function putCached(key: string, value: unknown, ttlMs: number, staleMaxMs?: number) {
-    cache.set(key, value, ttlMs, "upstream", staleMaxMs);
+export function putCached(
+    key: string,
+    value: unknown,
+    ttlMs: number,
+    staleMaxMs?: number,
+    origin: LoadOrigin = "upstream"
+) {
+    cache.set(key, value, ttlMs, origin, staleMaxMs);
 }
 
 /** Alter und Ablauf aller Einträge, ohne die Werte (für /debug/status). */
